@@ -1,0 +1,35 @@
+services:
+  tor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tracezero-tor
+    ports:
+      - "9050:9050"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "9050"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  tor-gateway:
+    build:
+      context: ../tor-gateway
+      dockerfile: Dockerfile
+    container_name: tracezero-gateway
+    ports:
+      - "3080:3080"
+    environment:
+      - TOR_SOCKS_HOST=tor
+      - TOR_SOCKS_PORT=9050
+      - GATEWAY_PORT=3080
+    depends_on:
+      tor:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  default:
+    name: tracezero-network

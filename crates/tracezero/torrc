@@ -1,0 +1,13 @@
+# Tor configuration for TraceZero
+
+# SOCKS5 proxy port - listen on all interfaces for Docker
+SocksPort 0.0.0.0:9050
+
+# Data directory
+DataDirectory /var/lib/tor
+
+# Logging
+Log notice stdout
+
+# Allow connections from Docker network
+SocksPolicy accept *
