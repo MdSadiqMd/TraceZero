@@ -1,0 +1,10 @@
+SocksPort 0.0.0.0:9050
+
+DataDirectory /var/lib/tor
+
+Log notice stdout
+Log info stdout # remove in prod
+
+SafeLogging 0
+
+SocksPolicy accept * # allowing connections from docker network
