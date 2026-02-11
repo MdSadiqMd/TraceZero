@@ -32,6 +32,7 @@ impl TorHttpClient {
         Ok(Self { client, config })
     }
 
+    #[cfg(any(test, feature = "test-utils"))]
     pub fn new_direct() -> Result<Self> {
         let client = Client::builder()
             .build()

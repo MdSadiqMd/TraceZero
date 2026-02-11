@@ -30,7 +30,8 @@ pub fn tor_client() -> Result<TorHttpClient> {
     TorHttpClient::new(Config::default())
 }
 
-/// no tor func, just for testing
+// no tor func, just for testing
+#[cfg(any(test, feature = "test-utils"))]
 pub fn direct_client() -> Result<TorHttpClient> {
     TorHttpClient::new_direct()
 }
