@@ -4,8 +4,11 @@ interface PacketAnalysis {
   isEncrypted: boolean;
 }
 
-function analyzePacket(data: Buffer | string, searchTerms: string[]): PacketAnalysis {
-  const dataStr = typeof data === 'string' ? data : data.toString('utf-8');
+function analyzePacket(
+  data: Buffer | string,
+  searchTerms: string[],
+): PacketAnalysis {
+  const dataStr = typeof data === "string" ? data : data.toString("utf-8");
   const exposedData: string[] = [];
 
   for (const term of searchTerms) {
@@ -40,36 +43,36 @@ function createEncryptedTorCell(): Buffer {
   return cell;
 }
 
-describe('Packet Encryption Analysis', () => {
+describe("Packet Encryption Analysis", () => {
   const sensitiveData = {
-    destination: 'api.relayer.privacy-proxy.io',
-    authToken: 'BEARER_TOKEN_xyz123abc',
-    secretPayload: 'commitment_hash_0xdeadbeef',
-    userWallet: 'So1anaWa11etAddre55Here123456789',
+    destination: "api.relayer.privacy-proxy.io",
+    authToken: "BEARER_TOKEN_xyz123abc",
+    secretPayload: "commitment_hash_0xdeadbeef",
+    userWallet: "So1anaWa11etAddre55Here123456789",
   };
 
   const searchTerms = Object.values(sensitiveData);
 
-  describe('Direct HTTP Traffic', () => {
-    it('should expose destination in plaintext', () => {
+  describe("Direct HTTP Traffic", () => {
+    it("should expose destination in plaintext", () => {
       const directRequest = `GET /api/deposit HTTP/1.1\r\nHost: ${sensitiveData.destination}\r\n\r\n`;
       const analysis = analyzePacket(directRequest, searchTerms);
 
       expect(analysis.containsPlaintext).toBe(true);
       expect(analysis.exposedData).toContain(sensitiveData.destination);
-      console.log('Direct request LEAKS destination:', analysis.exposedData);
+      console.log("Direct request LEAKS destination:", analysis.exposedData);
     });
 
-    it('should expose auth tokens in plaintext', () => {
+    it("should expose auth tokens in plaintext", () => {
       const directRequest = `POST /api/deposit HTTP/1.1\r\nHost: api.example.com\r\nAuthorization: ${sensitiveData.authToken}\r\n\r\n`;
       const analysis = analyzePacket(directRequest, searchTerms);
 
       expect(analysis.containsPlaintext).toBe(true);
       expect(analysis.exposedData).toContain(sensitiveData.authToken);
-      console.log('Direct request LEAKS auth token:', analysis.exposedData);
+      console.log("Direct request LEAKS auth token:", analysis.exposedData);
     });
 
-    it('should expose request body in plaintext', () => {
+    it("should expose request body in plaintext", () => {
       const requestBody = JSON.stringify({
         commitment: sensitiveData.secretPayload,
         wallet: sensitiveData.userWallet,
@@ -81,47 +84,47 @@ describe('Packet Encryption Analysis', () => {
       expect(analysis.containsPlaintext).toBe(true);
       expect(analysis.exposedData).toContain(sensitiveData.secretPayload);
       expect(analysis.exposedData).toContain(sensitiveData.userWallet);
-      console.log('Direct request LEAKS body:', analysis.exposedData);
+      console.log("Direct request LEAKS body:", analysis.exposedData);
     });
   });
 
-  describe('Tor-Routed Traffic', () => {
-    it('should NOT expose destination', () => {
+  describe("Tor-Routed Traffic", () => {
+    it("should NOT expose destination", () => {
       const torCell = createEncryptedTorCell();
       const analysis = analyzePacket(torCell, searchTerms);
 
       expect(analysis.containsPlaintext).toBe(false);
       expect(analysis.isEncrypted).toBe(true);
-      console.log('✓ Tor traffic hides destination');
+      console.log("✓ Tor traffic hides destination");
     });
 
-    it('should NOT expose auth tokens', () => {
+    it("should NOT expose auth tokens", () => {
       const torCell = createEncryptedTorCell();
       const analysis = analyzePacket(torCell, searchTerms);
 
       expect(analysis.exposedData).not.toContain(sensitiveData.authToken);
-      console.log('✓ Tor traffic hides auth tokens');
+      console.log("✓ Tor traffic hides auth tokens");
     });
 
-    it('should NOT expose request payload', () => {
+    it("should NOT expose request payload", () => {
       const torCell = createEncryptedTorCell();
       const analysis = analyzePacket(torCell, searchTerms);
 
       expect(analysis.exposedData).not.toContain(sensitiveData.secretPayload);
       expect(analysis.exposedData).not.toContain(sensitiveData.userWallet);
-      console.log('✓ Tor traffic hides payload');
+      console.log("✓ Tor traffic hides payload");
     });
   });
 
-  describe('Comparison: Direct vs Tor', () => {
-    it('should prove Tor provides complete traffic encryption', () => {
+  describe("Comparison: Direct vs Tor", () => {
+    it("should prove Tor provides complete traffic encryption", () => {
       // Direct traffic - full visibility
       const directTraffic = `
         POST /api/deposit HTTP/1.1
         Host: ${sensitiveData.destination}
         Authorization: ${sensitiveData.authToken}
         Content-Type: application/json
-        
+
         {"commitment":"${sensitiveData.secretPayload}","wallet":"${sensitiveData.userWallet}"}
       `;
 
@@ -131,9 +134,17 @@ describe('Packet Encryption Analysis', () => {
       const directAnalysis = analyzePacket(directTraffic, searchTerms);
       const torAnalysis = analyzePacket(torTraffic, searchTerms);
 
-      console.log('\n=== Traffic Analysis Comparison ===');
-      console.log('Direct traffic exposed:', directAnalysis.exposedData.length, 'sensitive items');
-      console.log('Tor traffic exposed:', torAnalysis.exposedData.length, 'sensitive items');
+      console.log("\n=== Traffic Analysis Comparison ===");
+      console.log(
+        "Direct traffic exposed:",
+        directAnalysis.exposedData.length,
+        "sensitive items",
+      );
+      console.log(
+        "Tor traffic exposed:",
+        torAnalysis.exposedData.length,
+        "sensitive items",
+      );
 
       // Direct exposes everything
       expect(directAnalysis.containsPlaintext).toBe(true);
@@ -143,20 +154,20 @@ describe('Packet Encryption Analysis', () => {
       expect(torAnalysis.containsPlaintext).toBe(false);
       expect(torAnalysis.exposedData.length).toBe(0);
 
-      console.log('\n✓ PROOF: Tor encryption prevents ALL traffic analysis');
-      console.log('  Observer sees: Encrypted cells to Tor entry node');
-      console.log('  Observer cannot see: Destination, headers, or body');
+      console.log("\n✓ PROOF: Tor encryption prevents ALL traffic analysis");
+      console.log("  Observer sees: Encrypted cells to Tor entry node");
+      console.log("  Observer cannot see: Destination, headers, or body");
     });
   });
 });
 
-describe('Tor Cell Structure', () => {
-  it('should demonstrate Tor cell format hides content', () => {
+describe("Tor Cell Structure", () => {
+  it("should demonstrate Tor cell format hides content", () => {
     // Tor cell structure
     const cell = {
       circuitId: 0x80000001, // 4 bytes - identifies circuit, not destination
-      command: 3,            // 1 byte - RELAY command
-      payload: 'encrypted',  // 509 bytes - AES-128-CTR encrypted
+      command: 3, // 1 byte - RELAY command
+      payload: "encrypted", // 509 bytes - AES-128-CTR encrypted
     };
 
     // What observer sees
@@ -165,10 +176,12 @@ describe('Tor Cell Structure', () => {
     observerView.writeUInt8(cell.command, 4);
     // Rest is encrypted garbage to observer
 
-    const searchTerms = ['api.relayer.com', 'secret', 'wallet', 'deposit'];
+    const searchTerms = ["api.relayer.com", "secret", "wallet", "deposit"];
     const analysis = analyzePacket(observerView, searchTerms);
 
     expect(analysis.isEncrypted).toBe(true);
-    console.log('✓ Tor cell structure provides no useful information to observer');
+    console.log(
+      "✓ Tor cell structure provides no useful information to observer",
+    );
   });
 });

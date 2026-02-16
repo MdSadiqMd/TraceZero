@@ -1,45 +1,77 @@
-import express, { Request, Response, NextFunction } from 'express';
-import { SocksProxyAgent } from 'socks-proxy-agent';
+import express, { Request, Response, NextFunction } from "express";
+import { SocksProxyAgent } from "socks-proxy-agent";
 
 const app = express();
 
-const TOR_SOCKS_HOST = process.env.TOR_SOCKS_HOST || '127.0.0.1';
-const TOR_SOCKS_PORT = process.env.TOR_SOCKS_PORT || '9050';
-const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT || '3080', 10);
+const TOR_SOCKS_HOST = process.env.TOR_SOCKS_HOST || "127.0.0.1";
+const TOR_SOCKS_PORT = process.env.TOR_SOCKS_PORT || "9050";
+const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT || "3080", 10);
 
 const torProxyUrl = `socks5h://${TOR_SOCKS_HOST}:${TOR_SOCKS_PORT}`;
 const agent = new SocksProxyAgent(torProxyUrl);
 
+app.use((_req: Request, res: Response, next: NextFunction) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept",
+  );
+  if (_req.method === "OPTIONS") {
+    res.sendStatus(200);
+    return;
+  }
+  next();
+});
+
 app.use(express.json());
 app.use(express.text());
 
-app.get('/health', (_req: Request, res: Response) => {
-  res.json({ status: 'ok', tor: torProxyUrl });
+app.get("/health", (_req: Request, res: Response) => {
+  res.json({ status: "ok", tor: torProxyUrl });
 });
 
-app.all('/proxy', async (req: Request, res: Response, next: NextFunction) => {
+app.all("/proxy", async (req: Request, res: Response, next: NextFunction) => {
   const targetUrl = req.query.url as string;
   if (!targetUrl) {
-    res.status(400).json({ error: 'Missing url query parameter' });
+    res.status(400).json({ error: "Missing url query parameter" });
     return;
   }
 
   try {
-    const fetchModule = await import('node-fetch');
+    const fetchModule = await import("node-fetch");
     const fetch = fetchModule.default;
 
-    const response = await fetch(targetUrl, {
+    const url = new URL(targetUrl);
+    const isLocalhost =
+      url.hostname === "localhost" || url.hostname === "127.0.0.1";
+
+    let finalUrl = targetUrl;
+    if (isLocalhost) {
+      const RELAYER_HOST = process.env.RELAYER_HOST || "host.docker.internal";
+      finalUrl = targetUrl.replace(/localhost|127\.0\.0\.1/, RELAYER_HOST);
+      console.log(
+        `[proxy] Localhost detected, routing via Tor to: ${finalUrl}`,
+      );
+    } else {
+      console.log(`[proxy] External URL, routing via Tor: ${targetUrl}`);
+    }
+
+    const response = await fetch(finalUrl, {
       method: req.method,
       headers: {
-        'Content-Type': req.get('Content-Type') || 'application/json',
-        'User-Agent': 'TraceZero/1.0',
+        "Content-Type": req.get("Content-Type") || "application/json",
+        "User-Agent": "TraceZero/1.0",
       },
-      body: req.method !== 'GET' && req.method !== 'HEAD' ? JSON.stringify(req.body) : undefined,
-      agent,
+      body:
+        req.method !== "GET" && req.method !== "HEAD"
+          ? JSON.stringify(req.body)
+          : undefined,
+      agent: agent, // ALWAYS use Tor agent
     });
 
-    const contentType = response.headers.get('content-type');
-    const data = contentType?.includes('application/json')
+    const contentType = response.headers.get("content-type");
+    const data = contentType?.includes("application/json")
       ? await response.json()
       : await response.text();
 
@@ -49,13 +81,15 @@ app.all('/proxy', async (req: Request, res: Response, next: NextFunction) => {
   }
 });
 
-app.get('/ip', async (_req: Request, res: Response, next: NextFunction) => {
+app.get("/ip", async (_req: Request, res: Response, next: NextFunction) => {
   try {
-    const fetchModule = await import('node-fetch');
+    const fetchModule = await import("node-fetch");
     const fetch = fetchModule.default;
 
-    const response = await fetch('https://api.ipify.org?format=json', { agent });
-    const data = await response.json() as { ip: string };
+    const response = await fetch("https://api.ipify.org?format=json", {
+      agent,
+    });
+    const data = (await response.json()) as { ip: string };
 
     res.json({ exitIp: data.ip, viaTor: true });
   } catch (error) {
@@ -63,26 +97,31 @@ app.get('/ip', async (_req: Request, res: Response, next: NextFunction) => {
   }
 });
 
-app.get('/verify-tor', async (_req: Request, res: Response, next: NextFunction) => {
-  try {
-    const fetchModule = await import('node-fetch');
-    const fetch = fetchModule.default;
+app.get(
+  "/verify-tor",
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const fetchModule = await import("node-fetch");
+      const fetch = fetchModule.default;
 
-    const response = await fetch('https://check.torproject.org/api/ip', { agent });
-    const data = await response.json() as { IsTor: boolean; IP: string };
+      const response = await fetch("https://check.torproject.org/api/ip", {
+        agent,
+      });
+      const data = (await response.json()) as { IsTor: boolean; IP: string };
 
-    res.json({
-      isTor: data.IsTor,
-      exitIp: data.IP,
-      proxyUrl: torProxyUrl
-    });
-  } catch (error) {
-    next(error);
-  }
-});
+      res.json({
+        isTor: data.IsTor,
+        exitIp: data.IP,
+        proxyUrl: torProxyUrl,
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+);
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  console.error('Gateway error:', err.message);
+  console.error("Gateway error:", err.message);
   res.status(500).json({ error: err.message });
 });
 
