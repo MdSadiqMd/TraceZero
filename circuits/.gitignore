@@ -1,0 +1,17 @@
+# Build artifacts
+build/
+*.r1cs
+*.sym
+*.wasm
+*.wtns
+
+# Trusted setup files (large)
+ptau/
+*.ptau
+*.zkey
+
+# Node modules
+node_modules/
+
+# Logs
+*.log

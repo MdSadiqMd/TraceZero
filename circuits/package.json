@@ -1,0 +1,24 @@
+{
+  "name": "privacy-proxy-circuits",
+  "version": "0.1.0",
+  "description": "ZK circuits for privacy-proxy withdrawal proofs",
+  "private": true,
+  "scripts": {
+    "build": "echo 'Circuits are pre-compiled. Run yarn compile to rebuild.'",
+    "compile": "./scripts/compile.sh",
+    "setup": "./scripts/setup.sh",
+    "export-vk": "./scripts/export_vk.sh",
+    "test": "node scripts/test_circuit.js",
+    "clean": "rm -rf build"
+  },
+  "dependencies": {
+    "circomlib": "^2.0.5",
+    "snarkjs": "^0.7.5"
+  },
+  "devDependencies": {
+    "circomlibjs": "^0.1.7"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
