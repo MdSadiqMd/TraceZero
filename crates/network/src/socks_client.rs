@@ -15,7 +15,11 @@ impl SocksClient {
         Self { config }
     }
 
-    pub async fn connect(&self, target_host: &str, target_port: u16) -> Result<Socks5Stream<TcpStream>> {
+    pub async fn connect(
+        &self,
+        target_host: &str,
+        target_port: u16,
+    ) -> Result<Socks5Stream<TcpStream>> {
         let proxy_addr: SocketAddr = self
             .config
             .socks_addr
@@ -29,7 +33,12 @@ impl SocksClient {
         Ok(stream)
     }
 
-    pub async fn send_receive(&self, target_host: &str, target_port: u16, data: &[u8]) -> Result<Vec<u8>> {
+    pub async fn send_receive(
+        &self,
+        target_host: &str,
+        target_port: u16,
+        data: &[u8],
+    ) -> Result<Vec<u8>> {
         let mut stream = self.connect(target_host, target_port).await?;
         stream
             .write_all(data)

@@ -1,7 +1,7 @@
-use std::time::Duration;
 use reqwest::{Client, Proxy, Response};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::time::Duration;
 
 use crate::config::Config;
 use crate::error::{Result, TraceZeroError};
@@ -69,7 +69,11 @@ impl TorHttpClient {
             .map_err(|e| TraceZeroError::Http(format!("POST request failed: {}", e)))
     }
 
-    pub async fn post_json<T: Serialize, R: DeserializeOwned>(&self, url: &str, body: &T) -> Result<R> {
+    pub async fn post_json<T: Serialize, R: DeserializeOwned>(
+        &self,
+        url: &str,
+        body: &T,
+    ) -> Result<R> {
         let response = self.post(url, body).await?;
         response
             .json()
