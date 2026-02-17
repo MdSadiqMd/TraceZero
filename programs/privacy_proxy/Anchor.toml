@@ -7,12 +7,17 @@ skip-lint = false
 
 [programs.localnet]
 privacy_proxy = "Dzpj74oeEhpyXwaiLUFKgzVz1Dcj4ZobsoczYdHiMaB3"
+zk_verifier = "AL6EfrDUdBdwqwrrA1gsq3KwfSJs4wLq4BKyABAzsqvA"
+
+[programs.devnet]
+privacy_proxy = "Dzpj74oeEhpyXwaiLUFKgzVz1Dcj4ZobsoczYdHiMaB3"
+zk_verifier = "2ntZ79MomBLsLyaExjGW6F7kkYtmprhdzZzQaMXSMZRu"
 
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]

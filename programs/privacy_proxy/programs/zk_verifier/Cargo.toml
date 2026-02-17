@@ -1,0 +1,31 @@
+[package]
+name = "zk_verifier"
+version = "0.1.0"
+description = "Groth16 ZK proof verifier for privacy-proxy withdrawals"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "zk_verifier"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+
+[dependencies]
+anchor-lang = "0.32.0"
+groth16-solana = "0.2.0"
+
+[dev-dependencies]
+ark-bn254 = "0.5.0"
+ark-serialize = "0.5.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
