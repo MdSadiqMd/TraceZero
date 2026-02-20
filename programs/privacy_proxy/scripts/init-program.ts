@@ -6,6 +6,9 @@ import {
   Keypair,
   Connection,
   LAMPORTS_PER_SOL,
+  SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import * as fs from "fs";
 import * as os from "os";
@@ -38,7 +41,10 @@ async function main() {
     "Dzpj74oeEhpyXwaiLUFKgzVz1Dcj4ZobsoczYdHiMaB3"
   );
   const idl = JSON.parse(
-    fs.readFileSync("./target/idl/privacy_proxy.json", "utf-8")
+    fs.readFileSync(
+      "./programs/privacy_proxy/target/idl/privacy_proxy.json",
+      "utf-8"
+    )
   );
   const program = new Program(idl, provider) as Program<PrivacyProxy>;
 
@@ -60,8 +66,11 @@ async function main() {
     console.log("Protocol not initialized, initializing...");
   }
 
-  // Generate relayer treasury keypair
-  const relayerTreasury = Keypair.generate();
+  // Generate relayer treasury PDA
+  const [relayerTreasuryPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("treasury")],
+    programId
+  );
 
   // RSA public key placeholders (will be replaced by actual relayer key)
   const relayerSigningKeyN = new Array(256).fill(1);
@@ -71,7 +80,7 @@ async function main() {
   console.log("Initializing protocol...");
   const tx = await program.methods
     .initialize({
-      relayerTreasury: relayerTreasury.publicKey,
+      relayerTreasury: relayerTreasuryPda,
       authorizedRelayer: wallet.publicKey, // Use same wallet as relayer for testing
       relayerSigningKeyN: relayerSigningKeyN,
       relayerSigningKeyE: relayerSigningKeyE,
@@ -123,9 +132,46 @@ async function main() {
         .rpc();
 
       console.log(`Pool ${bucketId} initialized: ${poolTx}`);
+
+      // Fund the pool with the bucket amount
+      console.log(
+        `Funding pool ${bucketId} with ${
+          bucketAmounts[bucketId] / LAMPORTS_PER_SOL
+        } SOL...`
+      );
+      const fundTx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey: poolPda,
+          lamports: bucketAmounts[bucketId],
+        })
+      );
+      await sendAndConfirmTransaction(connection, fundTx, [wallet]);
+      console.log(`Pool ${bucketId} funded`);
     } catch (e: any) {
       if (e.message?.includes("already in use")) {
         console.log(`Pool ${bucketId} already initialized`);
+        // Still try to fund it
+        try {
+          console.log(
+            `Funding pool ${bucketId} with ${
+              bucketAmounts[bucketId] / LAMPORTS_PER_SOL
+            } SOL...`
+          );
+          const fundTx = new Transaction().add(
+            SystemProgram.transfer({
+              fromPubkey: wallet.publicKey,
+              toPubkey: poolPda,
+              lamports: bucketAmounts[bucketId],
+            })
+          );
+          await sendAndConfirmTransaction(connection, fundTx, [wallet]);
+          console.log(`Pool ${bucketId} funded`);
+        } catch (fundError: any) {
+          console.log(
+            `Pool ${bucketId} already funded or error: ${fundError.message}`
+          );
+        }
       } else {
         console.error(`Failed to initialize pool ${bucketId}:`, e.message);
       }
