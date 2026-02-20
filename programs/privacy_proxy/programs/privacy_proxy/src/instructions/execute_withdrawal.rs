@@ -87,13 +87,36 @@ pub fn handler(ctx: Context<ExecuteWithdrawal>) -> Result<()> {
         PrivacyProxyError::Overflow
     );
 
-    // Transfer to recipient (stealth address)
-    **pool.to_account_info().try_borrow_mut_lamports()? -= pending.amount;
-    **ctx.accounts.recipient.try_borrow_mut_lamports()? += pending.amount;
+    // Direct lamport transfer from pool (program-owned PDA) to recipient
+    // This works because:
+    // 1. Pool is owned by our program, so we can debit it
+    // 2. Any account can receive lamports (credit)
+    // 3. The recipient will be created if it doesn't exist, as long as it receives >= rent-exempt minimum
+
+    // Debit pool and credit recipient
+    let pool_info = pool.to_account_info();
+    let recipient_info = ctx.accounts.recipient.to_account_info();
+    let treasury_info = ctx.accounts.relayer_treasury.to_account_info();
+
+    // Transfer amount to recipient
+    **pool_info.try_borrow_mut_lamports()? = pool_info
+        .lamports()
+        .checked_sub(pending.amount)
+        .ok_or(PrivacyProxyError::Overflow)?;
+    **recipient_info.try_borrow_mut_lamports()? = recipient_info
+        .lamports()
+        .checked_add(pending.amount)
+        .ok_or(PrivacyProxyError::Overflow)?;
 
     // Transfer fee to relayer treasury
-    **pool.to_account_info().try_borrow_mut_lamports()? -= pending.fee;
-    **ctx.accounts.relayer_treasury.try_borrow_mut_lamports()? += pending.fee;
+    **pool_info.try_borrow_mut_lamports()? = pool_info
+        .lamports()
+        .checked_sub(pending.fee)
+        .ok_or(PrivacyProxyError::Overflow)?;
+    **treasury_info.try_borrow_mut_lamports()? = treasury_info
+        .lamports()
+        .checked_add(pending.fee)
+        .ok_or(PrivacyProxyError::Overflow)?;
 
     // Update pool anonymity set
     pool.anonymity_set_size = pool.anonymity_set_size.saturating_sub(1);

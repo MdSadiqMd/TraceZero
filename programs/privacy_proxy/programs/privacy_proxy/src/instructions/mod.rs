@@ -5,3 +5,4 @@ pub mod init_pool;
 pub mod initialize;
 pub mod purchase_credits;
 pub mod request_withdrawal;
+pub mod update_config;

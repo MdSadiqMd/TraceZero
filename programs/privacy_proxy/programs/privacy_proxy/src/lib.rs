@@ -12,6 +12,7 @@ use instructions::init_pool::*;
 use instructions::initialize::*;
 use instructions::purchase_credits::*;
 use instructions::request_withdrawal::*;
+use instructions::update_config::*;
 
 declare_id!("Dzpj74oeEhpyXwaiLUFKgzVz1Dcj4ZobsoczYdHiMaB3");
 
@@ -93,5 +94,9 @@ pub mod privacy_proxy {
         binding_hash: [u8; 32],
     ) -> Result<()> {
         instructions::cancel_withdrawal::handler(ctx, proof_a, proof_b, proof_c, binding_hash)
+    }
+
+    pub fn update_config(ctx: Context<UpdateConfig>, params: UpdateConfigParams) -> Result<()> {
+        instructions::update_config::handler(ctx, params)
     }
 }

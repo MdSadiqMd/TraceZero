@@ -70,7 +70,7 @@ pub struct Deposit<'info> {
 pub fn handler(
     ctx: Context<Deposit>,
     bucket_id: u8,
-    commitment: [u8; 32],
+    _commitment: [u8; 32],
     token_hash: [u8; 32],
     encrypted_note_data: Vec<u8>,
     merkle_root: [u8; 32], // Actual Merkle root from relayer
