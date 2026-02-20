@@ -1,0 +1,42 @@
+[package]
+name = "relayer"
+version = "0.1.0"
+edition = "2021"
+description = "Privacy-proxy relayer service - handles blind signatures, deposits, and withdrawals"
+
+[[bin]]
+name = "relayer"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.7", features = ["macros"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace", "limit"] }
+tower_governor = "0.4"  # Rate limiting
+tokio = { version = "1", features = ["full"] }
+solana-sdk = "2.0"
+solana-client = "2.0"
+solana-transaction-status = "2.0"
+rsa = { version = "0.9", features = ["sha2"] }
+sha2 = "0.10"
+rand = "0.8"
+light-poseidon = "0.1"
+ark-bn254 = "0.4"
+ark-ff = "0.4"
+x25519-dalek = { version = "2.0", features = ["static_secrets"] }
+aes-gcm = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bs58 = "0.5"
+hex = "0.4"
+thiserror = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dotenvy = "0.15"
+shellexpand = "3.1"
+privacy-proxy-sdk = { path = "../privacy-proxy-sdk" }
+
+[dev-dependencies]
+tempfile = "3.25.0"
+tokio-test = "0.4"
