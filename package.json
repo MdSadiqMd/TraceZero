@@ -1,0 +1,33 @@
+{
+  "name": "privacy-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ZK-powered private transaction protocol on Solana",
+  "workspaces": [
+    "app",
+    "tests",
+    "circuits"
+  ],
+  "scripts": {
+    "build": "yarn workspaces run build",
+    "test": "yarn workspace tests test",
+    "test:anchor": "cd programs/privacy_proxy && anchor test",
+    "dev": "yarn workspace privacy-proxy-app dev",
+    "lint": "yarn workspaces run lint",
+    "circuits:compile": "cd circuits && ./scripts/compile.sh",
+    "circuits:setup": "cd circuits && ./scripts/setup.sh",
+    "relayer:start": "cargo run -p relayer",
+    "tor:start": "docker-compose -f crates/network/docker-compose.yml up -d",
+    "tor:stop": "docker-compose -f crates/network/docker-compose.yml down",
+    "gateway:start": "yarn workspace tor-gateway start",
+    "deploy:devnet": "./scripts/deploy-devnet.sh",
+    "deploy:mainnet": "./scripts/deploy-mainnet.sh"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

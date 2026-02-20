@@ -1,0 +1,27 @@
+[toolchain]
+package_manager = "yarn"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.localnet]
+privacy_proxy = "Dzpj74oeEhpyXwaiLUFKgzVz1Dcj4ZobsoczYdHiMaB3"
+zk_verifier = "AL6EfrDUdBdwqwrrA1gsq3KwfSJs4wLq4BKyABAzsqvA"
+
+[programs.devnet]
+privacy_proxy = "Dzpj74oeEhpyXwaiLUFKgzVz1Dcj4ZobsoczYdHiMaB3"
+zk_verifier = "2ntZ79MomBLsLyaExjGW6F7kkYtmprhdzZzQaMXSMZRu"
+
+[registry]
+url = "https://api.apr.dev"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+
+[workspace]
+members = ["programs/privacy_proxy"]
