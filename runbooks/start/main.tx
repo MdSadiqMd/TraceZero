@@ -1,0 +1,34 @@
+################################################################
+# Start TRACE_ZERO local validator with programs
+################################################################
+
+addon "svm" {
+    rpc_api_url = input.rpc_api_url
+    network_id = input.network_id
+}
+
+// Deploy privacy_proxy program to simnet
+action "load_privacy_proxy" "svm::deploy_program" {
+    description = "Load privacy_proxy program"
+    program = svm::get_program_from_anchor_project("privacy_proxy") 
+    authority = signer.authority
+    payer = signer.payer
+    instant_surfnet_deployment = true
+}
+
+// Deploy zk_verifier program to simnet
+action "load_zk_verifier" "svm::deploy_program" {
+    description = "Load zk_verifier program"
+    program = svm::get_program_from_anchor_project("zk_verifier") 
+    authority = signer.authority
+    payer = signer.payer
+    instant_surfnet_deployment = true
+}
+
+output "privacy_proxy_id" {
+    value = action.load_privacy_proxy.program_id
+}
+
+output "zk_verifier_id" {
+    value = action.load_zk_verifier.program_id
+}

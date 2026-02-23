@@ -1,0 +1,7 @@
+signer "authority" "svm::secret_key" {
+    mnemonic = "test test test test test test test test test test test junk"
+}
+
+signer "payer" "svm::secret_key" {
+    mnemonic = "test test test test test test test test test test test junk"
+}

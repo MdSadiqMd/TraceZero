@@ -3,7 +3,10 @@ name: tracezero
 id: tracezero
 runbooks:
   - name: deployment
-    description: Deploy programs
+    description: Start local validator with programs
+    location: runbooks/start
+  - name: deploy
+    description: Deploy programs to devnet/mainnet
     location: runbooks/deployment
 environments:
   localnet:
