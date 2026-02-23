@@ -561,10 +561,25 @@ function PendingSection({
           </div>
 
           {executeError && (
-            <div className="mt-4 border-2 border-red-500 bg-red-500/10 p-3">
-              <div className="font-mono text-sm text-red-400">
-                {">"} {executeError}
+            <div className="mt-4 border-2 border-lime/30 bg-black p-4">
+              <div className="font-mono text-sm text-lime/80 mb-2">
+                <span className="text-lime mr-2">{">"}</span>
+                EXECUTION_ERROR
               </div>
+              <div className="font-mono text-xs text-white/60 leading-relaxed mb-3">
+                {executeError}
+              </div>
+              {executeError.includes("0x0") && (
+                <div className="pt-3 border-t-2 border-lime/20 font-mono text-xs text-lime/60">
+                  <div className="mb-1">TROUBLESHOOTING:</div>
+                  <div className="text-white/50">
+                    • This error usually resolves on retry
+                    <br />
+                    • Click [EXECUTE_NOW] again
+                    <br />• Account initialization may need a moment
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {executeTx && (

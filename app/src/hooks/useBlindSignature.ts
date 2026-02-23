@@ -122,10 +122,16 @@ export function useBlindSignature() {
           throw new Error("Payment transaction failed");
         }
 
-        // Extra delay to ensure RPC nodes have synced
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-
         console.log("Payment confirmed:", paymentSig);
+        console.log(
+          "View on explorer:",
+          `https://explorer.solana.com/tx/${paymentSig}?cluster=devnet`,
+        );
+
+        // Extra delay to ensure RPC nodes have synced (devnet can be slow)
+        // The relayer will also retry fetching the transaction
+        console.log("Waiting for RPC propagation...");
+        await new Promise((resolve) => setTimeout(resolve, 5000));
         setState((s) => ({ ...s, isPaying: false }));
 
         // Step 4: Generate random token ID
@@ -161,8 +167,21 @@ export function useBlindSignature() {
 
         return { tokenId, signature };
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "Blind signature failed";
+        let message = "Blind signature failed";
+        if (error instanceof Error) {
+          message = error.message;
+          // Make relayer errors more user-friendly
+          if (message.includes("Payment transaction not found")) {
+            message =
+              "Payment transaction not found on-chain yet. This can happen on devnet due to slow RPC propagation. Please wait a moment and try again.";
+          } else if (message.includes("Relayer error")) {
+            // Extract the actual error from the relayer response
+            const match = message.match(/"error":"([^"]+)"/);
+            if (match) {
+              message = `Relayer error: ${match[1]}`;
+            }
+          }
+        }
         setState((s) => ({
           ...s,
           isPaying: false,

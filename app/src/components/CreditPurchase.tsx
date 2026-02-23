@@ -130,14 +130,38 @@ export function CreditPurchase() {
       </div>
 
       {error && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400">
-          {error}
+        <div className="mb-4 p-4 border-2 border-lime/30 bg-black">
+          <div className="font-mono text-sm text-lime/80 mb-2">
+            <span className="text-lime mr-2">{'>'}</span>
+            ERROR
+          </div>
+          <div className="font-mono text-xs text-white/60 leading-relaxed">
+            {error}
+          </div>
+          {error.includes("Payment transaction not found") && (
+            <div className="mt-3 pt-3 border-t-2 border-lime/20 font-mono text-xs text-lime/60">
+              <div className="mb-1">TROUBLESHOOTING:</div>
+              <div className="text-white/50">
+                • Devnet RPC can be slow (10-15s propagation)
+                <br />
+                • Wait a moment and try purchasing again
+                <br />
+                • Your SOL payment was sent but not yet visible to relayer
+              </div>
+            </div>
+          )}
         </div>
       )}
 
       {success && (
-        <div className="mb-4 p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-sm text-green-400">
-          ✓ Credit purchased! You can now make an anonymous deposit.
+        <div className="mb-4 p-4 border-2 border-lime bg-black">
+          <div className="font-mono text-sm text-lime mb-2">
+            <span className="mr-2">{'>'}</span>
+            CREDIT_PURCHASED_SUCCESSFULLY
+          </div>
+          <div className="font-mono text-xs text-white/60">
+            You can now make an anonymous deposit via Tor
+          </div>
         </div>
       )}
 
