@@ -310,14 +310,51 @@ async fn sign_blinded(
     // Verify payment on-chain
     let relayer_pubkey = state.config.keypair.pubkey();
 
-    // Fetch transaction with retries (devnet can be slow)
+    // First check if transaction exists using getSignatureStatuses (faster)
+    info!("Checking transaction status for {}", payment_sig);
+    let status_result = state
+        .rpc_client
+        .get_signature_statuses(&[payment_sig])
+        .await
+        .map_err(|e| {
+            RelayerError::InvalidRequest(format!(
+                "Failed to check transaction status: {}. RPC might be unavailable.",
+                e
+            ))
+        })?;
+
+    if let Some(status_opt) = status_result.value.first() {
+        if let Some(status) = status_opt {
+            if status.err.is_some() {
+                return Err(RelayerError::InvalidRequest(
+                    "Payment transaction failed on-chain".into(),
+                ));
+            }
+            info!("Transaction status confirmed, fetching full transaction...");
+        } else {
+            return Err(RelayerError::InvalidRequest(
+                "Payment transaction not found. Make sure it's confirmed and wait a few seconds."
+                    .into(),
+            ));
+        }
+    } else {
+        return Err(RelayerError::InvalidRequest(
+            "Could not verify transaction status".into(),
+        ));
+    }
+
+    // Fetch full transaction with retries (devnet can be slow)
     let mut tx_result = None;
     for attempt in 0..10 {
         match state
             .rpc_client
-            .get_transaction(
+            .get_transaction_with_config(
                 &payment_sig,
-                solana_transaction_status::UiTransactionEncoding::Json,
+                solana_client::rpc_config::RpcTransactionConfig {
+                    encoding: Some(solana_transaction_status::UiTransactionEncoding::Json),
+                    commitment: Some(solana_sdk::commitment_config::CommitmentConfig::confirmed()),
+                    max_supported_transaction_version: Some(0),
+                },
             )
             .await
         {
@@ -334,7 +371,7 @@ async fn sign_blinded(
                     tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
                 } else {
                     return Err(RelayerError::InvalidRequest(format!(
-                        "Payment transaction not found: {}. Make sure it's confirmed.",
+                        "Payment transaction not found: {}. Transaction exists but full data not available yet. Please try again in a moment.",
                         e
                     )));
                 }

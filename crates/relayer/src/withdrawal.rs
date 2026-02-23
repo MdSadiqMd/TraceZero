@@ -426,7 +426,7 @@ impl WithdrawalService {
         // amount is below rent-exempt minimum for a 0-byte account (890,880 lamports),
         // the transaction fails. Pre-funding with rent-exempt minimum avoids this.
         let rent_exempt_minimum: u64 = 890_880; // 0-byte account rent-exempt minimum
-        let mut instructions = Vec::new();
+        let mut prefunded = false;
 
         let recipient_exists = self.rpc_client.get_account(&record.recipient).await.is_ok();
         if !recipient_exists {
@@ -434,11 +434,24 @@ impl WithdrawalService {
                 "Recipient {} doesn't exist, pre-funding with {} lamports",
                 record.recipient, rent_exempt_minimum
             );
-            instructions.push(solana_sdk::system_instruction::transfer(
-                &relayer.pubkey(),
-                &record.recipient,
-                rent_exempt_minimum,
-            ));
+            let prefund_tx = Transaction::new_signed_with_payer(
+                &[solana_sdk::system_instruction::transfer(
+                    &relayer.pubkey(),
+                    &record.recipient,
+                    rent_exempt_minimum,
+                )],
+                Some(&relayer.pubkey()),
+                &[relayer.as_ref()],
+                self.rpc_client.get_latest_blockhash().await?,
+            );
+            self.rpc_client
+                .send_and_confirm_transaction(&prefund_tx)
+                .await
+                .map_err(|e| {
+                    RelayerError::TransactionFailed(format!("Failed to pre-fund recipient: {}", e))
+                })?;
+            info!("✓ Recipient pre-funded");
+            prefunded = true;
         }
 
         let treasury_exists = self.rpc_client.get_account(&relayer_treasury).await.is_ok();
@@ -447,11 +460,30 @@ impl WithdrawalService {
                 "Treasury {} doesn't exist, pre-funding with {} lamports",
                 relayer_treasury, rent_exempt_minimum
             );
-            instructions.push(solana_sdk::system_instruction::transfer(
-                &relayer.pubkey(),
-                &relayer_treasury,
-                rent_exempt_minimum,
-            ));
+            let prefund_tx = Transaction::new_signed_with_payer(
+                &[solana_sdk::system_instruction::transfer(
+                    &relayer.pubkey(),
+                    &relayer_treasury,
+                    rent_exempt_minimum,
+                )],
+                Some(&relayer.pubkey()),
+                &[relayer.as_ref()],
+                self.rpc_client.get_latest_blockhash().await?,
+            );
+            self.rpc_client
+                .send_and_confirm_transaction(&prefund_tx)
+                .await
+                .map_err(|e| {
+                    RelayerError::TransactionFailed(format!("Failed to pre-fund treasury: {}", e))
+                })?;
+            info!("✓ Treasury pre-funded");
+            prefunded = true;
+        }
+
+        // Small delay to ensure pre-funded accounts are fully settled
+        // This prevents race conditions on devnet/localhost
+        if prefunded {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
         }
 
         let discriminator = anchor_discriminator("execute_withdrawal");
@@ -470,29 +502,41 @@ impl WithdrawalService {
             data: discriminator.to_vec(),
         };
 
-        instructions.push(instruction);
-
         let recent_blockhash = self.rpc_client.get_latest_blockhash().await?;
         let transaction = Transaction::new_signed_with_payer(
-            &instructions,
+            &[instruction],
             Some(&relayer.pubkey()),
             &[relayer.as_ref()],
             recent_blockhash,
         );
 
-        // Skip preflight to see actual on-chain error
-        let signature = self
+        // Send transaction with better error handling
+        let signature = match self
             .rpc_client
             .send_and_confirm_transaction_with_spinner_and_config(
                 &transaction,
                 self.rpc_client.commitment(),
                 solana_client::rpc_config::RpcSendTransactionConfig {
-                    skip_preflight: true,
+                    skip_preflight: false, // Enable preflight for better error messages
                     ..Default::default()
                 },
             )
             .await
-            .map_err(|e| RelayerError::TransactionFailed(e.to_string()))?;
+        {
+            Ok(sig) => sig,
+            Err(e) => {
+                let error_msg = e.to_string();
+                if error_msg.contains("0x0") {
+                    return Err(RelayerError::TransactionFailed(
+                        "Transaction failed with error 0x0. This usually means an account doesn't have enough lamports for rent. Please try again.".to_string()
+                    ));
+                }
+                return Err(RelayerError::TransactionFailed(format!(
+                    "Withdrawal execution failed: {}",
+                    error_msg
+                )));
+            }
+        };
 
         info!(
             "Withdrawal executed: recipient={}, amount={}, fee={}, tx={}",
