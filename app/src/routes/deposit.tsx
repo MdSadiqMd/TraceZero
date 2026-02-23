@@ -25,11 +25,10 @@ function DepositPage() {
   const [selectedCredit, setSelectedCredit] = useState<Credit | null>(null);
   const [depositSuccess, setDepositSuccess] = useState(false);
   const [lastTxSignature, setLastTxSignature] = useState<string | null>(null);
-  const [devMode, setDevMode] = useState(false); // Skip delay for testing
+  const [devMode, setDevMode] = useState(false);
 
   const availableCredits = credits.filter((c) => !c.used);
 
-  // Check Tor on mount
   useEffect(() => {
     verifyTor().catch(() => {});
   }, [verifyTor]);
@@ -57,285 +56,359 @@ function DepositPage() {
     const hours = Math.floor(ms / 3600000);
     const minutes = Math.floor((ms % 3600000) / 60000);
     const seconds = Math.floor((ms % 60000) / 1000);
-
-    if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
-    if (minutes > 0) return `${minutes}m ${seconds}s`;
-    return `${seconds}s`;
+    return `${hours.toString().padStart(2, "0")}:${minutes.toString().padStart(2, "0")}:${seconds.toString().padStart(2, "0")}`;
   };
 
-  const getStepLabel = () => {
+  const getStepMessage = () => {
     switch (step) {
       case "verifying-tor":
-        return "Verifying Tor connection...";
+        return "VERIFYING_TOR_CONNECTION...";
       case "waiting-delay":
-        return `Waiting (timing protection): ${formatDelay(delayRemaining || 0)}`;
+        return `TIMING_PROTECTION_DELAY: ${formatDelay(delayRemaining || 0)}`;
       case "generating-commitment":
-        return "Generating commitment...";
+        return "GENERATING_COMMITMENT_HASH...";
       case "submitting":
-        return "Submitting deposit via Tor...";
+        return "SUBMITTING_VIA_TOR_NETWORK...";
       default:
-        return "";
+        return "READY";
     }
   };
 
+  if (!connected) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-6 bg-black">
+        <div className="terminal-box max-w-md w-full">
+          <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+            <div className="w-3 h-3 bg-red-500"></div>
+            <div className="w-3 h-3 bg-red-500/50"></div>
+            <div className="w-3 h-3 bg-red-500/20"></div>
+            <span className="ml-4 text-red-500 font-mono">ERROR</span>
+          </div>
+          <div className="text-red-500 font-mono text-sm">
+            <span className="mr-2">{">"}</span>
+            WALLET_NOT_CONNECTED
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="max-w-2xl mx-auto">
-      <h1 className="text-3xl font-bold mb-2">Deposit via Tor</h1>
-      <p className="text-gray-400 mb-8">
-        Redeem your credit to deposit into the privacy pool. All requests go
-        through Tor - your wallet never appears in the deposit transaction.
-      </p>
-
-      {/* Tor Status */}
-      <div className="card mb-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="font-semibold">Tor Connection</h2>
-            <p className="text-sm text-gray-500">
-              Required for anonymous deposits
-            </p>
+    <div className="min-h-screen bg-black text-white py-12 px-6">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="mb-12">
+          <div className="inline-block border-2 border-lime px-4 py-2 mb-6">
+            <span className="font-mono text-lime text-sm font-bold">
+              [STEP_02_OF_03]
+            </span>
           </div>
-          <div
-            className={`px-3 py-1 rounded-full text-sm ${
-              torVerified
-                ? "bg-green-500/20 text-green-400"
-                : "bg-yellow-500/20 text-yellow-400"
-            }`}
-          >
-            {torVerified ? "● Connected" : "● Checking..."}
-          </div>
-        </div>
-        {torExitIp && (
-          <p className="text-sm text-gray-500 mt-2">Exit IP: {torExitIp}</p>
-        )}
-        {!torVerified && (
-          <div className="mt-2">
-            <p className="text-sm text-yellow-400 mb-2">
-              Start Tor: docker compose -f crates/network/docker-compose.yml up
-              -d
-            </p>
-            <button
-              onClick={() => verifyTor()}
-              className="text-sm text-primary-400 hover:text-primary-300"
-            >
-              Retry connection →
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Dev Mode Toggle */}
-      <div className="card mb-6 border-yellow-500/30">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="font-semibold text-yellow-400">🧪 Dev Mode</h2>
-            <p className="text-sm text-gray-500">
-              Skip timing delay for faster local testing
-            </p>
-          </div>
-          <button
-            onClick={() => setDevMode(!devMode)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              devMode
-                ? "bg-yellow-500 text-black"
-                : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-            }`}
-          >
-            {devMode ? "ON" : "OFF"}
-          </button>
-        </div>
-        {devMode && (
-          <p className="text-xs text-yellow-400 mt-2">
-            ⚠️ Timing delay skipped. Tor verification still required.
+          <h1 className="font-mono font-black text-5xl lg:text-6xl mb-4">
+            <span className="text-lime">[</span>
+            <span className="text-white">DEPOSIT_VIA_TOR</span>
+            <span className="text-lime">]</span>
+          </h1>
+          <p className="font-mono text-white/60">
+            Redeem credit to deposit into privacy pool via Tor network
           </p>
-        )}
-      </div>
+        </div>
 
-      {!connected ? (
-        <div className="card text-center py-12">
-          <p className="text-gray-400 mb-4">Connect your wallet to deposit</p>
-        </div>
-      ) : availableCredits.length === 0 ? (
-        <div className="card text-center py-12">
-          <p className="text-gray-400 mb-4">No available credits</p>
-          <a href="/credits" className="btn-primary">
-            Purchase Credits
-          </a>
-        </div>
-      ) : (
-        <>
-          {/* Credit Selection */}
-          <div className="card mb-6">
-            <h2 className="text-xl font-semibold mb-4">Select Credit</h2>
-            <div className="space-y-3">
-              {availableCredits.map((credit) => (
+        <div className="grid lg:grid-cols-2 gap-8">
+          {/* Left - System Status */}
+          <div className="space-y-6">
+            {/* Tor Status */}
+            <div className="terminal-box">
+              <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+                <div
+                  className={`w-3 h-3 ${torVerified ? "bg-lime animate-pulse" : "bg-yellow-500"}`}
+                ></div>
+                <div
+                  className={`w-3 h-3 ${torVerified ? "bg-lime/50" : "bg-yellow-500/50"}`}
+                ></div>
+                <div
+                  className={`w-3 h-3 ${torVerified ? "bg-lime/20" : "bg-yellow-500/20"}`}
+                ></div>
+                <span
+                  className={`ml-4 font-mono ${torVerified ? "text-lime" : "text-yellow-500"}`}
+                >
+                  TOR_NETWORK_STATUS
+                </span>
+              </div>
+              <div className="space-y-2 text-sm font-mono">
+                <div className="flex justify-between">
+                  <span className="text-white/60">CONNECTION:</span>
+                  <span
+                    className={torVerified ? "text-lime" : "text-yellow-500"}
+                  >
+                    {torVerified ? "ESTABLISHED" : "CHECKING..."}
+                  </span>
+                </div>
+                {torExitIp && (
+                  <div className="flex justify-between">
+                    <span className="text-white/60">EXIT_NODE:</span>
+                    <span className="text-lime">{torExitIp}</span>
+                  </div>
+                )}
+                {!torVerified && (
+                  <div className="mt-4 pt-4 border-t-2 border-yellow-500/30">
+                    <div className="text-yellow-500 text-xs mb-2">
+                      {">"} START_TOR_GATEWAY:
+                    </div>
+                    <div className="text-white/40 text-xs mb-3">
+                      docker compose -f crates/network/docker-compose.yml up -d
+                    </div>
+                    <button
+                      onClick={() => verifyTor()}
+                      className="border-2 border-yellow-500 text-yellow-500 px-4 py-2 text-xs font-bold hover:bg-yellow-500 hover:text-black transition-colors"
+                    >
+                      [RETRY_CONNECTION]
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Dev Mode */}
+            <div className="border-2 border-yellow-500/50 p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <div className="font-mono text-yellow-500 font-bold mb-1">
+                    DEV_MODE
+                  </div>
+                  <div className="font-mono text-xs text-white/60">
+                    Skip timing delay for testing
+                  </div>
+                </div>
                 <button
-                  key={credit.id}
-                  onClick={() => setSelectedCredit(credit)}
-                  className={`w-full p-4 rounded-lg border-2 text-left transition-colors ${
-                    selectedCredit?.id === credit.id
-                      ? "border-primary-500 bg-primary-500/10"
-                      : "border-gray-700 hover:border-gray-600"
+                  onClick={() => setDevMode(!devMode)}
+                  className={`border-2 px-4 py-2 font-mono font-bold text-sm transition-colors ${
+                    devMode
+                      ? "border-yellow-500 bg-yellow-500 text-black"
+                      : "border-yellow-500/50 text-yellow-500 hover:bg-yellow-500/10"
                   }`}
                 >
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <div className="font-semibold">
-                        {credit.amount / 1e9} SOL
-                      </div>
-                      <div className="text-sm text-gray-500">
-                        Purchased{" "}
-                        {new Date(credit.createdAt).toLocaleDateString()}
-                      </div>
-                    </div>
-                    <div className="text-primary-400">
-                      {selectedCredit?.id === credit.id
-                        ? "✓ Selected"
-                        : "Select"}
-                    </div>
-                  </div>
+                  [{devMode ? "ON" : "OFF"}]
                 </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Deposit Action */}
-          {selectedCredit && (
-            <div className="card mb-6">
-              <h2 className="text-xl font-semibold mb-4">Deposit Summary</h2>
-              <div className="space-y-2 text-sm mb-4">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Amount</span>
-                  <span>{selectedCredit.amount / 1e9} SOL</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Network</span>
-                  <span className="text-green-400">Via Tor</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Your Wallet in TX</span>
-                  <span className="text-green-400">Never</span>
-                </div>
               </div>
-              <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-3 mb-4">
-                <p className="text-sm text-yellow-400">
-                  ⚠️ Save your deposit note after this transaction. You'll need
-                  it to withdraw.
-                </p>
-              </div>
-
-              {/* Progress indicator */}
-              {isDepositing && (
-                <div className="mb-4 p-3 bg-primary-500/10 border border-primary-500/30 rounded-lg">
-                  <div className="flex items-center gap-2">
-                    <svg
-                      className="animate-spin h-5 w-5 text-primary-400"
-                      viewBox="0 0 24 24"
-                    >
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                        fill="none"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                      />
-                    </svg>
-                    <span className="text-sm text-primary-400">
-                      {getStepLabel()}
-                    </span>
-                  </div>
+              {devMode && (
+                <div className="text-xs font-mono text-yellow-500/80">
+                  {">"} TIMING_DELAY_DISABLED
                 </div>
-              )}
-
-              {error && (
-                <div className="mb-4 p-3 bg-red-500/10 border border-red-500/50 rounded-lg text-red-400 text-sm">
-                  {error}
-                </div>
-              )}
-
-              {depositSuccess && (
-                <div className="mb-4 p-3 bg-green-500/10 border border-green-500/50 rounded-lg text-green-400 text-sm">
-                  <div>
-                    Deposit successful! Your wallet was NOT in the transaction.
-                  </div>
-                  {lastTxSignature && (
-                    <a
-                      href={`https://explorer.solana.com/tx/${lastTxSignature}?cluster=devnet`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-green-300 hover:underline text-xs"
-                    >
-                      View transaction →
-                    </a>
-                  )}
-                </div>
-              )}
-
-              <button
-                onClick={handleDeposit}
-                disabled={isDepositing || !torVerified}
-                className="btn-primary w-full"
-              >
-                {isDepositing ? "Depositing via Tor..." : "Deposit Now"}
-              </button>
-              {!torVerified && (
-                <p className="text-xs text-yellow-400 mt-2 text-center">
-                  Tor connection required. Start Tor gateway first.
-                </p>
               )}
             </div>
-          )}
 
-          {/* Existing Deposits */}
-          <div className="card">
-            <h2 className="text-xl font-semibold mb-4">Your Deposits</h2>
-            {deposits.length === 0 ? (
-              <p className="text-gray-500 text-center py-4">No deposits yet.</p>
-            ) : (
-              <div className="space-y-3">
-                {deposits.map((deposit) => (
-                  <div
-                    key={deposit.id}
-                    className={`p-4 rounded-lg border ${
-                      deposit.withdrawn
-                        ? "border-gray-700 opacity-50"
-                        : "border-green-500/50 bg-green-500/5"
-                    }`}
-                  >
-                    <div className="flex justify-between items-center">
-                      <div>
-                        <div className="font-semibold">
-                          {deposit.amount / 1e9} SOL
+            {/* Credit Selection */}
+            {availableCredits.length > 0 && (
+              <div className="terminal-box">
+                <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+                  <div className="w-3 h-3 bg-lime"></div>
+                  <div className="w-3 h-3 bg-lime/50"></div>
+                  <div className="w-3 h-3 bg-lime/20"></div>
+                  <span className="ml-4 text-lime font-mono">
+                    SELECT_CREDIT
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {availableCredits.map((credit, idx) => (
+                    <button
+                      key={credit.id}
+                      onClick={() => setSelectedCredit(credit)}
+                      disabled={isDepositing}
+                      className={`w-full text-left p-4 border-2 transition-all duration-200 font-mono text-sm ${
+                        selectedCredit?.id === credit.id
+                          ? "border-lime bg-lime/10 text-lime"
+                          : "border-lime/20 text-white/60 hover:border-lime/50"
+                      } ${isDepositing ? "opacity-50 cursor-not-allowed" : ""}`}
+                    >
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <div className="text-xs text-lime/60 mb-1">
+                            CREDIT_0x
+                            {idx.toString(16).toUpperCase().padStart(4, "0")}
+                          </div>
+                          <div className="font-bold tabular-nums">
+                            {credit.amount / 1e9} SOL
+                          </div>
                         </div>
-                        <div className="text-sm text-gray-500">
-                          Leaf #{deposit.leafIndex} •{" "}
-                          {new Date(deposit.createdAt).toLocaleDateString()}
-                        </div>
+                        {selectedCredit?.id === credit.id && (
+                          <span className="text-lime">{">"} SELECTED</span>
+                        )}
                       </div>
-                      <div
-                        className={`px-3 py-1 rounded-full text-sm ${
-                          deposit.withdrawn
-                            ? "bg-gray-700 text-gray-400"
-                            : "bg-green-500/20 text-green-400"
-                        }`}
-                      >
-                        {deposit.withdrawn ? "Withdrawn" : "Available"}
-                      </div>
-                    </div>
-                  </div>
-                ))}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
           </div>
-        </>
-      )}
+
+          {/* Right - Deposit Action */}
+          <div>
+            {availableCredits.length === 0 ? (
+              <div className="terminal-box h-full flex items-center justify-center">
+                <div className="text-center">
+                  <div className="text-4xl text-red-500/20 mb-4">[ ! ]</div>
+                  <div className="font-mono text-white/40 mb-4">
+                    {">"} NO_AVAILABLE_CREDITS
+                  </div>
+                  <a href="/credits" className="btn-terminal inline-block">
+                    [PURCHASE_CREDITS]
+                  </a>
+                </div>
+              </div>
+            ) : selectedCredit ? (
+              <div className="space-y-6">
+                {/* Transaction Info */}
+                <div className="terminal-box">
+                  <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+                    <div className="w-3 h-3 bg-lime"></div>
+                    <div className="w-3 h-3 bg-lime/50"></div>
+                    <div className="w-3 h-3 bg-lime/20"></div>
+                    <span className="ml-4 text-lime font-mono">
+                      DEPOSIT_INFO
+                    </span>
+                  </div>
+                  <div className="space-y-2 text-sm font-mono">
+                    <div className="flex justify-between">
+                      <span className="text-white/60">AMOUNT:</span>
+                      <span className="text-lime tabular-nums">
+                        {selectedCredit.amount / 1e9} SOL
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-white/60">NETWORK:</span>
+                      <span className="text-lime">TOR_ROUTED</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-white/60">YOUR_WALLET_IN_TX:</span>
+                      <span className="text-lime">NEVER</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-white/60">ANONYMITY:</span>
+                      <span className="text-lime">COMPLETE</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Progress */}
+                {isDepositing && (
+                  <div className="border-2 border-lime p-4">
+                    <div className="font-mono text-sm text-lime mb-3">
+                      {">"} {getStepMessage()}
+                    </div>
+                    <div className="h-2 bg-black border-2 border-lime/30 overflow-hidden">
+                      <div
+                        className="h-full bg-lime animate-[pulse_1s_ease-in-out_infinite]"
+                        style={{ width: "70%" }}
+                      ></div>
+                    </div>
+                    <div className="mt-2 font-mono text-xs text-lime/60">
+                      PROCESSING_0x
+                      {Math.random().toString(16).substr(2, 8).toUpperCase()}...
+                    </div>
+                  </div>
+                )}
+
+                {/* Error */}
+                {error && (
+                  <div className="border-2 border-red-500 bg-red-500/10 p-4">
+                    <div className="flex items-start gap-2 font-mono text-sm">
+                      <span className="text-red-500">{">"}</span>
+                      <div>
+                        <div className="text-red-500 font-bold mb-1">
+                          ERROR:
+                        </div>
+                        <div className="text-red-400">{error}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Success */}
+                {depositSuccess && (
+                  <div className="border-2 border-lime bg-lime/10 p-4">
+                    <div className="flex items-start gap-2 font-mono text-sm">
+                      <span className="text-lime">{">"}</span>
+                      <div>
+                        <div className="text-lime font-bold mb-1">SUCCESS:</div>
+                        <div className="text-lime/80">DEPOSIT_COMPLETED</div>
+                        <div className="text-lime/60 text-xs mt-2">
+                          YOUR_WALLET_NOT_IN_TRANSACTION
+                        </div>
+                        {lastTxSignature && (
+                          <a
+                            href={`https://explorer.solana.com/tx/${lastTxSignature}?cluster=devnet`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-lime/80 hover:text-lime text-xs mt-2 inline-block"
+                          >
+                            {">"} VIEW_TX: {lastTxSignature.slice(0, 8)}...
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Deposit Button */}
+                <button
+                  onClick={handleDeposit}
+                  disabled={isDepositing || !torVerified}
+                  className="btn-terminal w-full text-lg"
+                >
+                  {isDepositing ? "[DEPOSITING...]" : "[EXECUTE_DEPOSIT]"}
+                </button>
+
+                {!torVerified && (
+                  <div className="text-center font-mono text-xs text-yellow-500">
+                    {">"} TOR_CONNECTION_REQUIRED
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="terminal-box h-full flex items-center justify-center">
+                <div className="text-center">
+                  <div className="text-4xl text-lime/20 mb-4">[ ]</div>
+                  <div className="font-mono text-white/40">
+                    {">"} SELECT_CREDIT_TO_CONTINUE
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Existing Deposits */}
+        {deposits.length > 0 && (
+          <div className="mt-12 terminal-box">
+            <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+              <div className="w-3 h-3 bg-lime"></div>
+              <div className="w-3 h-3 bg-lime/50"></div>
+              <div className="w-3 h-3 bg-lime/20"></div>
+              <span className="ml-4 text-lime font-mono">YOUR_DEPOSITS</span>
+            </div>
+            <div className="data-grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+              {deposits.map((deposit, idx) => (
+                <div key={deposit.id} className="data-cell">
+                  <div className="text-xs text-lime/60 mb-2">
+                    DEPOSIT_0x{idx.toString(16).toUpperCase().padStart(4, "0")}
+                  </div>
+                  <div className="font-bold text-lg tabular-nums mb-1">
+                    {deposit.amount / 1e9} SOL
+                  </div>
+                  <div className="text-xs text-white/40 mb-2">
+                    LEAF_#{deposit.leafIndex}
+                  </div>
+                  <div
+                    className={`text-xs font-mono ${deposit.withdrawn ? "text-white/40" : "text-lime"}`}
+                  >
+                    {deposit.withdrawn ? "[WITHDRAWN]" : "[AVAILABLE]"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

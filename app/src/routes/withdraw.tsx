@@ -11,40 +11,6 @@ export const Route = createFileRoute("/withdraw")({
   component: WithdrawPage,
 });
 
-const EXPLORER_BASE = "https://explorer.solana.com/tx";
-const SOLSCAN_BASE = "https://solscan.io/tx";
-
-function explorerUrl(sig: string) {
-  return `${EXPLORER_BASE}/${sig}?cluster=devnet`;
-}
-
-function solscanUrl(sig: string) {
-  return `${SOLSCAN_BASE}/${sig}?cluster=devnet`;
-}
-
-function TxLinks({ sig }: { sig: string }) {
-  return (
-    <div className="flex gap-3 text-xs mt-2">
-      <a
-        href={explorerUrl(sig)}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-primary-400 hover:underline"
-      >
-        Solana Explorer ↗
-      </a>
-      <a
-        href={solscanUrl(sig)}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-primary-400 hover:underline"
-      >
-        Solscan ↗
-      </a>
-    </div>
-  );
-}
-
 function WithdrawPage() {
   const { connected, publicKey } = useWallet();
   const { deposits } = useDepositStore();
@@ -70,9 +36,7 @@ function WithdrawPage() {
     try {
       const data = await relayerClient.getPendingWithdrawals();
       setPendingWithdrawals(data);
-    } catch {
-      /* relayer might not be up */
-    }
+    } catch {}
   }, []);
 
   useEffect(() => {
@@ -135,81 +99,166 @@ function WithdrawPage() {
     const h = Math.floor(diff / 3600);
     const m = Math.floor((diff % 3600) / 60);
     const s = diff % 60;
-    if (h > 0) return `${h}h ${m}m ${s}s`;
-    if (m > 0) return `${m}m ${s}s`;
-    return `${s}s`;
+    return `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
-  const getStepLabel = () => {
+  const getStepMessage = () => {
     switch (step) {
       case "generating-stealth":
-        return "Generating stealth address...";
+        return "GENERATING_STEALTH_ADDRESS...";
       case "fetching-proof":
-        return "Fetching Merkle proof...";
+        return "FETCHING_MERKLE_PROOF...";
       case "verifying-proof":
-        return "Verifying Merkle proof...";
+        return "VERIFYING_MERKLE_PROOF...";
       case "generating-zk-proof":
-        return `Generating ZK proof... ${proofProgress}%`;
+        return `GENERATING_ZK_PROOF... ${proofProgress}%`;
       case "submitting":
-        return "Submitting withdrawal request...";
+        return "SUBMITTING_WITHDRAWAL_REQUEST...";
       default:
-        return "";
+        return "READY";
     }
   };
 
   const activePending = pendingWithdrawals.filter((p) => !p.executed);
   const executedRecently = pendingWithdrawals.filter((p) => p.executed);
 
-  // ── Success view after requesting withdrawal ──
+  if (!connected) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-6 bg-black">
+        <div className="terminal-box max-w-md w-full">
+          <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+            <div className="w-3 h-3 bg-red-500"></div>
+            <div className="w-3 h-3 bg-red-500/50"></div>
+            <div className="w-3 h-3 bg-red-500/20"></div>
+            <span className="ml-4 text-red-500 font-mono">ERROR</span>
+          </div>
+          <div className="text-red-500 font-mono text-sm">
+            <span className="mr-2">{">"}</span>
+            WALLET_NOT_CONNECTED
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (txSignature) {
     return (
-      <div className="max-w-2xl mx-auto">
-        <h1 className="text-3xl font-bold mb-2">Withdraw</h1>
-        <p className="text-gray-400 mb-8">
-          Withdraw funds using a ZK proof. Your identity remains completely
-          hidden.
-        </p>
-
-        <div className="card mb-6 bg-green-500/10 border-green-500/30">
-          <div className="text-green-400 text-lg font-semibold mb-3">
-            ✓ Withdrawal Requested
-          </div>
-          <p className="text-sm text-gray-300 mb-4">
-            {devMode
-              ? "Dev mode: no timelock. The relayer will execute immediately (within 30s)."
-              : "Your withdrawal is pending with a timelock delay. The relayer will auto-execute once it expires."}
-          </p>
-
-          {stealthAddr && (
-            <div className="mb-3">
-              <div className="text-xs text-gray-500 mb-1">
-                Recipient (stealth address):
-              </div>
-              <code className="text-xs break-all text-gray-300">
-                {stealthAddr}
-              </code>
+      <div className="min-h-screen bg-black text-white py-12 px-6">
+        <div className="max-w-4xl mx-auto">
+          <div className="mb-12">
+            <div className="inline-block border-2 border-lime px-4 py-2 mb-6">
+              <span className="font-mono text-lime text-sm font-bold">
+                [STEP_03_OF_03]
+              </span>
             </div>
-          )}
+            <h1 className="font-mono font-black text-5xl lg:text-6xl mb-4">
+              <span className="text-lime">[</span>
+              <span className="text-white">WITHDRAW_WITH_ZK</span>
+              <span className="text-lime">]</span>
+            </h1>
+          </div>
 
-          <div className="text-xs text-gray-500 mb-1">Request tx:</div>
-          <code className="text-xs break-all text-green-300/80">
-            {txSignature}
-          </code>
-          <TxLinks sig={txSignature} />
+          <div className="border-2 border-lime bg-lime/10 p-6 mb-6">
+            <div className="flex items-start gap-2 font-mono text-sm">
+              <span className="text-lime">{">"}</span>
+              <div>
+                <div className="text-lime font-bold mb-2">
+                  WITHDRAWAL_REQUESTED
+                </div>
+                <div className="text-lime/80 mb-4">
+                  {devMode
+                    ? "DEV_MODE: NO_TIMELOCK // EXECUTES_IMMEDIATELY"
+                    : "TIMELOCK_ACTIVE // AUTO_EXECUTE_WHEN_EXPIRED"}
+                </div>
+                {stealthAddr && (
+                  <div className="mb-3">
+                    <div className="text-xs text-lime/60 mb-1">
+                      RECIPIENT_STEALTH:
+                    </div>
+                    <code className="text-xs break-all text-lime/80">
+                      {stealthAddr}
+                    </code>
+                  </div>
+                )}
+                <div className="text-xs text-lime/60 mb-1">REQUEST_TX:</div>
+                <code className="text-xs break-all text-lime">
+                  {txSignature}
+                </code>
+                <div className="mt-4">
+                  <button
+                    onClick={() => {
+                      setTxSignature(null);
+                      setStealthAddr(null);
+                    }}
+                    className="border-2 border-lime text-lime px-4 py-2 text-sm font-mono font-bold hover:bg-lime hover:text-black transition-colors"
+                  >
+                    [DONE]
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
 
-          <div className="mt-4">
+          <PendingSection
+            pending={activePending}
+            executed={executedRecently}
+            now={now}
+            formatCountdown={formatCountdown}
+            onExecute={handleExecute}
+            executingHash={executingHash}
+            executeError={executeError}
+            executeTx={executeTx}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-black text-white py-12 px-6">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="mb-12">
+          <div className="inline-block border-2 border-lime px-4 py-2 mb-6">
+            <span className="font-mono text-lime text-sm font-bold">
+              [STEP_03_OF_03]
+            </span>
+          </div>
+          <h1 className="font-mono font-black text-5xl lg:text-6xl mb-4">
+            <span className="text-lime">[</span>
+            <span className="text-white">WITHDRAW_WITH_ZK</span>
+            <span className="text-lime">]</span>
+          </h1>
+          <p className="font-mono text-white/60">
+            Generate ZK proof to withdraw to stealth address
+          </p>
+        </div>
+
+        {/* Dev Mode */}
+        <div className="border-2 border-yellow-500/50 p-6 mb-8">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="font-mono text-yellow-500 font-bold mb-1">
+                DEV_MODE
+              </div>
+              <div className="font-mono text-xs text-white/60">
+                Skip timelock delay
+              </div>
+            </div>
             <button
-              onClick={() => {
-                setTxSignature(null);
-                setStealthAddr(null);
-              }}
-              className="btn-secondary text-sm"
+              onClick={() => setDevMode(!devMode)}
+              className={`border-2 px-4 py-2 font-mono font-bold text-sm transition-colors ${
+                devMode
+                  ? "border-yellow-500 bg-yellow-500 text-black"
+                  : "border-yellow-500/50 text-yellow-500 hover:bg-yellow-500/10"
+              }`}
             >
-              Done
+              [{devMode ? "ON" : "OFF"}]
             </button>
           </div>
         </div>
 
+        {/* Pending Withdrawals */}
         <PendingSection
           pending={activePending}
           executed={executedRecently}
@@ -220,238 +269,223 @@ function WithdrawPage() {
           executeError={executeError}
           executeTx={executeTx}
         />
-      </div>
-    );
-  }
 
-  // ── Main withdraw form ──
-  return (
-    <div className="max-w-2xl mx-auto">
-      <h1 className="text-3xl font-bold mb-2">Withdraw</h1>
-      <p className="text-gray-400 mb-8">
-        Withdraw funds using a ZK proof. Your identity remains completely
-        hidden.
-      </p>
-
-      {/* Dev Mode Toggle */}
-      <div className="card mb-6 border-yellow-500/30">
-        <div className="flex items-center justify-between">
-          <div>
-            <h2 className="font-semibold text-yellow-400">🧪 Dev Mode</h2>
-            <p className="text-sm text-gray-500">
-              Skip timelock delay — withdrawal executes immediately
-            </p>
+        {availableDeposits.length === 0 ? (
+          <div className="terminal-box flex items-center justify-center py-20">
+            <div className="text-center">
+              <div className="text-4xl text-red-500/20 mb-4">[ ! ]</div>
+              <div className="font-mono text-white/40 mb-4">
+                {">"} NO_DEPOSITS_AVAILABLE
+              </div>
+              <a href="/deposit" className="btn-terminal inline-block">
+                [MAKE_DEPOSIT]
+              </a>
+            </div>
           </div>
-          <button
-            onClick={() => setDevMode(!devMode)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              devMode
-                ? "bg-yellow-500 text-black"
-                : "bg-gray-700 text-gray-300 hover:bg-gray-600"
-            }`}
-          >
-            {devMode ? "ON" : "OFF"}
-          </button>
-        </div>
-        {devMode && (
-          <p className="text-xs text-yellow-400 mt-2">
-            ⚠️ Timelock set to 0 hours. Withdrawal can be executed immediately
-            after request.
-          </p>
+        ) : (
+          <div className="grid lg:grid-cols-2 gap-8">
+            {/* Left - Deposit Selection */}
+            <div className="space-y-6">
+              <div className="terminal-box">
+                <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+                  <div className="w-3 h-3 bg-lime"></div>
+                  <div className="w-3 h-3 bg-lime/50"></div>
+                  <div className="w-3 h-3 bg-lime/20"></div>
+                  <span className="ml-4 text-lime font-mono">
+                    SELECT_DEPOSIT
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {availableDeposits.map((deposit, idx) => (
+                    <button
+                      key={deposit.id}
+                      onClick={() => setSelectedDeposit(deposit)}
+                      disabled={isWithdrawing}
+                      className={`w-full text-left p-4 border-2 transition-all duration-200 font-mono text-sm ${
+                        selectedDeposit?.id === deposit.id
+                          ? "border-lime bg-lime/10 text-lime"
+                          : "border-lime/20 text-white/60 hover:border-lime/50"
+                      } ${isWithdrawing ? "opacity-50 cursor-not-allowed" : ""}`}
+                    >
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <div className="text-xs text-lime/60 mb-1">
+                            DEPOSIT_0x
+                            {idx.toString(16).toUpperCase().padStart(4, "0")} //
+                            LEAF_#{deposit.leafIndex}
+                          </div>
+                          <div className="font-bold tabular-nums">
+                            {deposit.amount / 1e9} SOL
+                          </div>
+                        </div>
+                        {selectedDeposit?.id === deposit.id && (
+                          <span className="text-lime">{">"} SELECTED</span>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Stealth toggle */}
+              {selectedDeposit && (
+                <div className="border-2 border-lime/20 p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <div className="font-mono text-white font-bold mb-1">
+                        STEALTH_ADDRESS
+                      </div>
+                      <div className="font-mono text-xs text-white/60">
+                        One-time address for maximum privacy
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setUseStealth(!useStealth)}
+                      className={`border-2 px-4 py-2 font-mono font-bold text-sm transition-colors ${
+                        useStealth
+                          ? "border-lime bg-lime text-black"
+                          : "border-lime/50 text-lime hover:bg-lime/10"
+                      }`}
+                    >
+                      [{useStealth ? "ON" : "OFF"}]
+                    </button>
+                  </div>
+                  {!useStealth && (
+                    <div>
+                      <label className="block font-mono text-xs text-lime/60 mb-2">
+                        RECIPIENT_ADDRESS:
+                      </label>
+                      <input
+                        type="text"
+                        value={recipientAddress}
+                        onChange={(e) => setRecipientAddress(e.target.value)}
+                        placeholder={
+                          publicKey?.toBase58() || "ENTER_SOLANA_ADDRESS"
+                        }
+                        className="w-full bg-black border-2 border-lime/30 px-4 py-2 font-mono text-sm text-white focus:border-lime focus:outline-none"
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Right - Withdrawal Action */}
+            <div>
+              {selectedDeposit ? (
+                <div className="space-y-6">
+                  {/* Summary */}
+                  <div className="terminal-box">
+                    <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+                      <div className="w-3 h-3 bg-lime"></div>
+                      <div className="w-3 h-3 bg-lime/50"></div>
+                      <div className="w-3 h-3 bg-lime/20"></div>
+                      <span className="ml-4 text-lime font-mono">
+                        WITHDRAWAL_INFO
+                      </span>
+                    </div>
+                    <div className="space-y-2 text-sm font-mono">
+                      <div className="flex justify-between">
+                        <span className="text-white/60">AMOUNT:</span>
+                        <span className="text-lime tabular-nums">
+                          {selectedDeposit.amount / 1e9} SOL
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-white/60">FEE_0.5%:</span>
+                        <span className="text-lime tabular-nums">
+                          {(selectedDeposit.amount * 0.005) / 1e9} SOL
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-white/60">YOU_RECEIVE:</span>
+                        <span className="text-lime tabular-nums">
+                          {(selectedDeposit.amount * 0.995) / 1e9} SOL
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-white/60">RECIPIENT:</span>
+                        <span className="text-lime">
+                          {useStealth ? "STEALTH_ADDR" : "CUSTOM"}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-white/60">TIMELOCK:</span>
+                        <span
+                          className={devMode ? "text-yellow-500" : "text-lime"}
+                        >
+                          {devMode ? "NONE" : "1-24_HRS"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Progress */}
+                  {isWithdrawing && (
+                    <div className="border-2 border-lime p-4">
+                      <div className="font-mono text-sm text-lime mb-3">
+                        {">"} {getStepMessage()}
+                      </div>
+                      <div className="h-2 bg-black border-2 border-lime/30 overflow-hidden mb-2">
+                        <div
+                          className="h-full bg-lime transition-all duration-300"
+                          style={{ width: `${proofProgress}%` }}
+                        ></div>
+                      </div>
+                      <div className="font-mono text-xs text-lime/60 tabular-nums">
+                        PROGRESS: {proofProgress}%
+                      </div>
+                      <div className="mt-2 font-mono text-xs text-lime/40">
+                        COMPUTING_0x
+                        {Math.random().toString(16).substr(2, 8).toUpperCase()}
+                        ...
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Error */}
+                  {error && (
+                    <div className="border-2 border-red-500 bg-red-500/10 p-4">
+                      <div className="flex items-start gap-2 font-mono text-sm">
+                        <span className="text-red-500">{">"}</span>
+                        <div>
+                          <div className="text-red-500 font-bold mb-1">
+                            ERROR:
+                          </div>
+                          <div className="text-red-400">{error}</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Withdraw button */}
+                  <button
+                    onClick={handleWithdraw}
+                    disabled={isWithdrawing}
+                    className="btn-terminal w-full text-lg"
+                  >
+                    {isWithdrawing
+                      ? "[GENERATING_PROOF...]"
+                      : "[EXECUTE_WITHDRAWAL]"}
+                  </button>
+                </div>
+              ) : (
+                <div className="terminal-box h-full flex items-center justify-center">
+                  <div className="text-center">
+                    <div className="text-4xl text-lime/20 mb-4">[ ]</div>
+                    <div className="font-mono text-white/40">
+                      {">"} SELECT_DEPOSIT_TO_CONTINUE
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </div>
-
-      {/* Pending withdrawals */}
-      <PendingSection
-        pending={activePending}
-        executed={executedRecently}
-        now={now}
-        formatCountdown={formatCountdown}
-        onExecute={handleExecute}
-        executingHash={executingHash}
-        executeError={executeError}
-        executeTx={executeTx}
-      />
-
-      {!connected ? (
-        <div className="card text-center py-12">
-          <p className="text-gray-400 mb-4">Connect your wallet to withdraw</p>
-        </div>
-      ) : availableDeposits.length === 0 ? (
-        <div className="card text-center py-12">
-          <p className="text-gray-400 mb-4">
-            No deposits available to withdraw
-          </p>
-          <a href="/deposit" className="btn-primary">
-            Make a Deposit
-          </a>
-        </div>
-      ) : (
-        <>
-          {/* Deposit Selection */}
-          <div className="card mb-6">
-            <h2 className="text-xl font-semibold mb-4">Select Deposit</h2>
-            <div className="space-y-3">
-              {availableDeposits.map((deposit) => (
-                <button
-                  key={deposit.id}
-                  onClick={() => setSelectedDeposit(deposit)}
-                  className={`w-full p-4 rounded-lg border-2 text-left transition-colors ${
-                    selectedDeposit?.id === deposit.id
-                      ? "border-primary-500 bg-primary-500/10"
-                      : "border-gray-700 hover:border-gray-600"
-                  }`}
-                >
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <div className="font-semibold">
-                        {deposit.amount / 1e9} SOL
-                      </div>
-                      <div className="text-sm text-gray-500">
-                        Leaf #{deposit.leafIndex} •{" "}
-                        {new Date(deposit.createdAt).toLocaleDateString()}
-                      </div>
-                    </div>
-                    <div className="text-primary-400">
-                      {selectedDeposit?.id === deposit.id
-                        ? "✓ Selected"
-                        : "Select"}
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Withdrawal Options */}
-          {selectedDeposit && (
-            <div className="card mb-6">
-              <h2 className="text-xl font-semibold mb-4">Withdrawal Options</h2>
-
-              {/* Stealth Address Toggle */}
-              <div className="flex items-center justify-between mb-4 p-3 rounded-lg bg-gray-800">
-                <div>
-                  <div className="font-medium">Use Stealth Address</div>
-                  <div className="text-sm text-gray-500">
-                    Generate a one-time address for maximum privacy
-                  </div>
-                </div>
-                <button
-                  onClick={() => setUseStealth(!useStealth)}
-                  className={`w-12 h-6 rounded-full transition-colors ${
-                    useStealth ? "bg-primary-500" : "bg-gray-600"
-                  }`}
-                  aria-label="Toggle stealth address"
-                >
-                  <div
-                    className={`w-5 h-5 rounded-full bg-white transition-transform ${
-                      useStealth ? "translate-x-6" : "translate-x-0.5"
-                    }`}
-                  />
-                </button>
-              </div>
-
-              {/* Recipient Address (only when stealth is off) */}
-              {!useStealth && (
-                <div className="mb-4">
-                  <label className="block text-sm font-medium mb-2">
-                    Recipient Address
-                  </label>
-                  <input
-                    type="text"
-                    value={recipientAddress}
-                    onChange={(e) => setRecipientAddress(e.target.value)}
-                    placeholder={
-                      publicKey?.toBase58() || "Enter Solana address"
-                    }
-                    className="w-full px-4 py-2 rounded-lg bg-gray-800 border border-gray-700 focus:border-primary-500 focus:outline-none"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Leave empty to use your connected wallet
-                  </p>
-                </div>
-              )}
-
-              {/* Summary */}
-              <div className="space-y-2 text-sm mb-4">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Amount</span>
-                  <span>{selectedDeposit.amount / 1e9} SOL</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Fee (0.5%)</span>
-                  <span>{(selectedDeposit.amount * 0.005) / 1e9} SOL</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">You receive</span>
-                  <span className="text-green-400">
-                    {(selectedDeposit.amount * 0.995) / 1e9} SOL
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Recipient</span>
-                  <span className="text-green-400">
-                    {useStealth
-                      ? "Stealth (auto-generated)"
-                      : recipientAddress || "Connected wallet"}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Timelock</span>
-                  <span
-                    className={devMode ? "text-yellow-400" : "text-gray-300"}
-                  >
-                    {devMode ? "None (dev mode)" : "1-24 hours (random)"}
-                  </span>
-                </div>
-              </div>
-
-              {/* Info */}
-              <div className="bg-blue-500/10 border border-blue-500/30 rounded-lg p-3 mb-4">
-                <p className="text-sm text-blue-400">
-                  ℹ️ Proof generation takes 30-60s.{" "}
-                  {devMode
-                    ? "Dev mode: withdrawal will execute immediately after."
-                    : "After that, a timelock delay applies before funds are released."}
-                </p>
-              </div>
-
-              {error && (
-                <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 mb-4">
-                  <p className="text-sm text-red-400">{error}</p>
-                </div>
-              )}
-
-              {isWithdrawing && (
-                <div className="mb-4">
-                  <div className="flex justify-between text-sm mb-1">
-                    <span className="text-gray-400">{getStepLabel()}</span>
-                  </div>
-                  <div className="w-full h-2 bg-gray-700 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-primary-500 transition-all duration-300"
-                      style={{ width: `${proofProgress}%` }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              <button
-                onClick={handleWithdraw}
-                disabled={isWithdrawing}
-                className="btn-primary w-full"
-              >
-                {isWithdrawing ? "Processing..." : "Withdraw Now"}
-              </button>
-            </div>
-          )}
-        </>
-      )}
     </div>
   );
 }
-
-// ─── Pending Withdrawals Section ─────────────────────────────────────────────
 
 function PendingSection({
   pending,
@@ -462,68 +496,63 @@ function PendingSection({
   executingHash,
   executeError,
   executeTx,
-}: {
-  pending: PendingWithdrawalInfo[];
-  executed: PendingWithdrawalInfo[];
-  now: number;
-  formatCountdown: (t: number) => string | null;
-  onExecute: (hash: string) => void;
-  executingHash: string | null;
-  executeError: string | null;
-  executeTx: string | null;
-}) {
+}: any) {
   if (pending.length === 0 && executed.length === 0) return null;
 
   return (
-    <>
+    <div className="mb-8">
       {pending.length > 0 && (
-        <div className="card mb-6">
-          <h2 className="text-lg font-semibold mb-4">Pending Withdrawals</h2>
+        <div className="terminal-box mb-6">
+          <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+            <div className="w-3 h-3 bg-yellow-500 animate-pulse"></div>
+            <div className="w-3 h-3 bg-yellow-500/50"></div>
+            <div className="w-3 h-3 bg-yellow-500/20"></div>
+            <span className="ml-4 text-yellow-500 font-mono">
+              PENDING_WITHDRAWALS
+            </span>
+          </div>
           <div className="space-y-3">
-            {pending.map((pw) => {
+            {pending.map((pw: any, _: number) => {
               const countdown = formatCountdown(pw.executeAfter);
               const ready = countdown === null;
               return (
                 <div
                   key={pw.nullifierHash}
-                  className="p-4 rounded-lg bg-gray-800/60 border border-gray-700/50"
+                  className="border-2 border-lime/20 p-4"
                 >
-                  <div className="flex justify-between items-center mb-2">
-                    <span className="font-semibold">{pw.amount / 1e9} SOL</span>
+                  <div className="flex justify-between items-center mb-2 font-mono text-sm">
+                    <span className="text-white font-bold tabular-nums">
+                      {pw.amount / 1e9} SOL
+                    </span>
                     {ready ? (
-                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/20 text-green-400">
-                        Ready
-                      </span>
+                      <span className="text-lime text-xs">[READY]</span>
                     ) : (
-                      <span className="text-xs font-mono text-gray-400">
+                      <span className="text-yellow-500 text-xs tabular-nums">
                         ⏱ {countdown}
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-gray-500 mb-1 break-all">
-                    → {pw.recipient}
-                  </div>
-                  <div className="text-xs text-gray-600 mb-3">
-                    Fee: {pw.fee / 1e9} SOL · Bucket #{pw.bucketId}
+                  <div className="text-xs font-mono text-white/40 mb-3 break-all">
+                    {">"} {pw.recipient}
                   </div>
                   {ready ? (
                     <button
                       onClick={() => onExecute(pw.nullifierHash)}
                       disabled={executingHash === pw.nullifierHash}
-                      className="btn-primary w-full text-sm py-2"
+                      className="btn-terminal w-full text-sm"
                     >
                       {executingHash === pw.nullifierHash
-                        ? "Executing..."
-                        : "Execute Now"}
+                        ? "[EXECUTING...]"
+                        : "[EXECUTE_NOW]"}
                     </button>
                   ) : (
-                    <div className="w-full bg-gray-700/50 rounded-full h-1.5 overflow-hidden">
+                    <div className="h-1 bg-black border border-lime/30 overflow-hidden">
                       <div
-                        className="h-full bg-primary-500/40 transition-all duration-1000"
+                        className="h-full bg-lime/40 transition-all duration-1000"
                         style={{
                           width: `${Math.max(0, Math.min(100, ((now - (pw.executeAfter - 86400)) / 86400) * 100))}%`,
                         }}
-                      />
+                      ></div>
                     </div>
                   )}
                 </div>
@@ -532,49 +561,28 @@ function PendingSection({
           </div>
 
           {executeError && (
-            <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-3 mt-3">
-              <p className="text-sm text-red-400">{executeError}</p>
+            <div className="mt-4 border-2 border-red-500 bg-red-500/10 p-3">
+              <div className="font-mono text-sm text-red-400">
+                {">"} {executeError}
+              </div>
             </div>
           )}
           {executeTx && (
-            <div className="bg-green-500/10 border border-green-500/30 rounded-lg p-3 mt-3">
-              <p className="text-sm text-green-400 mb-1">
-                ✓ Withdrawal executed
-              </p>
-              <code className="text-xs break-all text-green-300/80">
+            <div className="mt-4 border-2 border-lime bg-lime/10 p-3">
+              <div className="font-mono text-sm text-lime">
+                {">"} WITHDRAWAL_EXECUTED
+              </div>
+              <code className="text-xs break-all text-lime/80">
                 {executeTx}
               </code>
-              <TxLinks sig={executeTx} />
             </div>
           )}
 
-          <p className="text-xs text-gray-600 mt-3">
-            The relayer auto-executes every 30s when timelocks expire. You can
-            also trigger manually.
-          </p>
-        </div>
-      )}
-
-      {executed.length > 0 && (
-        <div className="card mb-6">
-          <h2 className="text-lg font-semibold mb-3 text-green-400/80">
-            Completed
-          </h2>
-          <div className="space-y-2">
-            {executed.slice(0, 5).map((pw) => (
-              <div
-                key={pw.nullifierHash}
-                className="flex justify-between items-center text-sm p-2 rounded bg-gray-800/30"
-              >
-                <span className="text-gray-400">
-                  {pw.amount / 1e9} SOL → {pw.recipient.slice(0, 12)}...
-                </span>
-                <span className="text-green-500 text-xs">✓</span>
-              </div>
-            ))}
+          <div className="mt-4 text-xs font-mono text-white/40">
+            {">"} AUTO_EXECUTE_EVERY_30S_WHEN_TIMELOCK_EXPIRES
           </div>
         </div>
       )}
-    </>
+    </div>
   );
 }

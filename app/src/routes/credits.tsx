@@ -33,11 +33,8 @@ function CreditsPage() {
 
     try {
       const amount = BUCKET_AMOUNTS[selectedBucket];
-
-      // Create signed token using blind signature protocol
       const { tokenId, signature } = await createSignedToken(amount);
 
-      // Store credit locally
       const credit: Credit = {
         id: crypto.randomUUID(),
         amount,
@@ -48,7 +45,10 @@ function CreditsPage() {
       };
       addCredit(credit);
       setPurchaseSuccess(true);
-      setSelectedBucket(null);
+      setTimeout(() => {
+        setPurchaseSuccess(false);
+        setSelectedBucket(null);
+      }, 5000);
     } catch (error) {
       console.error("Failed to purchase credit:", error);
       setPurchaseError(
@@ -61,179 +61,292 @@ function CreditsPage() {
 
   const isLoading = isPurchasing || isBlinding || isSigning || isUnblinding;
   const displayError = purchaseError || blindError;
+  const availableCredits = credits.filter((c) => !c.used);
 
-  return (
-    <div className="max-w-2xl mx-auto">
-      <h1 className="text-3xl font-bold mb-2">Purchase Credits</h1>
-      <p className="text-gray-400 mb-8">
-        Buy blinded credits to deposit into the privacy pool. The relayer cannot
-        link your payment to your deposit.
-      </p>
+  const getStatusMessage = () => {
+    if (isBlinding) return "BLINDING_TOKEN...";
+    if (isSigning) return "REQUESTING_SIGNATURE...";
+    if (isUnblinding) return "UNBLINDING_SIGNATURE...";
+    return "PROCESSING_TRANSACTION...";
+  };
 
-      {!connected ? (
-        <div className="card text-center py-12">
-          <p className="text-gray-400 mb-4">
-            Connect your wallet to purchase credits
-          </p>
-        </div>
-      ) : (
-        <>
-          {/* Bucket Selection */}
-          <div className="card mb-6">
-            <h2 className="text-xl font-semibold mb-4">Select Amount</h2>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {BUCKET_AMOUNTS.map((amount, index) => (
-                <button
-                  key={index}
-                  onClick={() => setSelectedBucket(index)}
-                  className={`p-4 rounded-lg border-2 transition-colors ${
-                    selectedBucket === index
-                      ? "border-primary-500 bg-primary-500/10"
-                      : "border-gray-700 hover:border-gray-600"
-                  }`}
-                >
-                  <div className="text-lg font-semibold">
-                    {amount / 1e9} SOL
-                  </div>
-                  <div className="text-sm text-gray-500">
-                    +{RELAYER_FEE_PERCENT}% fee
-                  </div>
-                </button>
-              ))}
+  if (!connected) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-6 bg-black">
+        <div className="terminal-box max-w-md w-full">
+          <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+            <div className="w-3 h-3 bg-red-500"></div>
+            <div className="w-3 h-3 bg-red-500/50"></div>
+            <div className="w-3 h-3 bg-red-500/20"></div>
+            <span className="ml-4 text-red-500 font-mono">ERROR</span>
+          </div>
+          <div className="space-y-2 text-sm">
+            <div className="text-red-500">
+              <span className="mr-2">{">"}</span>
+              WALLET_NOT_CONNECTED
+            </div>
+            <div className="text-white/60 mt-4">
+              <span className="mr-2">{">"}</span>
+              PLEASE_CONNECT_WALLET_TO_CONTINUE
             </div>
           </div>
+        </div>
+      </div>
+    );
+  }
 
-          {/* Purchase Summary */}
-          {selectedBucket !== null && (
-            <div className="card mb-6">
-              <h2 className="text-xl font-semibold mb-4">Summary</h2>
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Amount</span>
-                  <span>{BUCKET_AMOUNTS[selectedBucket] / 1e9} SOL</span>
+  return (
+    <div className="min-h-screen bg-black text-white py-12 px-6">
+      <div className="max-w-7xl mx-auto">
+        {/* Header */}
+        <div className="mb-12">
+          <div className="inline-block border-2 border-lime px-4 py-2 mb-6">
+            <span className="font-mono text-lime text-sm font-bold">
+              [STEP_01_OF_03]
+            </span>
+          </div>
+          <h1 className="font-mono font-black text-5xl lg:text-6xl mb-4">
+            <span className="text-lime">[</span>
+            <span className="text-white">PURCHASE_CREDITS</span>
+            <span className="text-lime">]</span>
+          </h1>
+          <p className="font-mono text-white/60">
+            Select amount to purchase blinded credits using RSA blind signatures
+          </p>
+        </div>
+
+        <div className="grid lg:grid-cols-2 gap-8">
+          {/* Left - Selection */}
+          <div>
+            <div className="terminal-box mb-6">
+              <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+                <div className="w-3 h-3 bg-lime"></div>
+                <div className="w-3 h-3 bg-lime/50"></div>
+                <div className="w-3 h-3 bg-lime/20"></div>
+                <span className="ml-4 text-lime">AMOUNT_SELECTION</span>
+              </div>
+
+              <div className="space-y-3">
+                {BUCKET_AMOUNTS.map((amount, index) => {
+                  const hexCode = `0x${(index + 1).toString(16).toUpperCase().padStart(6, "0")}`;
+                  return (
+                    <button
+                      key={index}
+                      onClick={() => setSelectedBucket(index)}
+                      disabled={isLoading}
+                      className={`w-full text-left p-4 border-2 transition-all duration-200 font-mono ${
+                        selectedBucket === index
+                          ? "border-lime bg-lime/10 text-lime"
+                          : "border-lime/20 text-white/60 hover:border-lime/50 hover:bg-lime/5"
+                      } ${isLoading ? "opacity-50 cursor-not-allowed" : ""}`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs text-lime/60">{hexCode}</span>
+                        {selectedBucket === index && (
+                          <span className="text-lime text-xs">
+                            {">"} SELECTED
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-2xl font-black tabular-nums">
+                          {amount / 1e9}
+                        </span>
+                        <span className="text-sm">SOL</span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Info */}
+            <div className="border-2 border-lime/20 p-6">
+              <div className="text-xs text-lime/60 font-mono mb-3">
+                PROTOCOL_INFO:
+              </div>
+              <div className="space-y-2 text-sm text-white/60">
+                <div className="flex gap-2">
+                  <span className="text-lime">{">"}</span>
+                  <span>RSA blind signatures ensure unlinkable payments</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">
-                    Fee ({RELAYER_FEE_PERCENT}%)
-                  </span>
-                  <span>
-                    {(BUCKET_AMOUNTS[selectedBucket] * RELAYER_FEE_PERCENT) /
-                      100 /
-                      1e9}{" "}
-                    SOL
-                  </span>
+                <div className="flex gap-2">
+                  <span className="text-lime">{">"}</span>
+                  <span>Relayer signs without seeing token value</span>
                 </div>
-                <div className="border-t border-gray-700 pt-2 flex justify-between font-semibold">
-                  <span>Total</span>
+                <div className="flex gap-2">
+                  <span className="text-lime">{">"}</span>
                   <span>
-                    {(BUCKET_AMOUNTS[selectedBucket] *
-                      (1 + RELAYER_FEE_PERCENT / 100)) /
-                      1e9}{" "}
-                    SOL
+                    Mathematically impossible to link payment to deposit
                   </span>
                 </div>
               </div>
-
-              {displayError && (
-                <div className="mt-4 p-3 bg-red-500/10 border border-red-500/50 rounded-lg text-red-400 text-sm">
-                  {displayError}
-                </div>
-              )}
-
-              {purchaseSuccess && (
-                <div className="mt-4 p-3 bg-green-500/10 border border-green-500/50 rounded-lg text-green-400 text-sm">
-                  Credit purchased successfully! You can now make an anonymous
-                  deposit.
-                </div>
-              )}
-
-              <button
-                onClick={handlePurchase}
-                disabled={isLoading}
-                className="btn-primary w-full mt-4"
-              >
-                {isLoading ? (
-                  <span className="flex items-center justify-center gap-2">
-                    <svg className="animate-spin h-5 w-5" viewBox="0 0 24 24">
-                      <circle
-                        className="opacity-25"
-                        cx="12"
-                        cy="12"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                        fill="none"
-                      />
-                      <path
-                        className="opacity-75"
-                        fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                      />
-                    </svg>
-                    {isBlinding
-                      ? "Blinding token..."
-                      : isSigning
-                        ? "Getting signature..."
-                        : isUnblinding
-                          ? "Unblinding..."
-                          : "Processing..."}
-                  </span>
-                ) : (
-                  "Purchase Credit"
-                )}
-              </button>
-
-              <p className="mt-3 text-xs text-gray-500 text-center">
-                🔒 Your payment is visible, but the blinded token makes it
-                mathematically impossible to link to your future deposit.
-              </p>
             </div>
-          )}
+          </div>
 
-          {/* Existing Credits */}
-          <div className="card">
-            <h2 className="text-xl font-semibold mb-4">Your Credits</h2>
-            {credits.length === 0 ? (
-              <p className="text-gray-500 text-center py-4">
-                No credits yet. Purchase one above.
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {credits.map((credit) => (
-                  <div
-                    key={credit.id}
-                    className={`p-4 rounded-lg border ${
-                      credit.used
-                        ? "border-gray-700 opacity-50"
-                        : "border-primary-500/50 bg-primary-500/5"
-                    }`}
-                  >
-                    <div className="flex justify-between items-center">
+          {/* Right - Confirmation */}
+          <div>
+            {selectedBucket !== null ? (
+              <div className="space-y-6">
+                {/* Transaction preview */}
+                <div className="terminal-box">
+                  <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+                    <div className="w-3 h-3 bg-lime"></div>
+                    <div className="w-3 h-3 bg-lime/50"></div>
+                    <div className="w-3 h-3 bg-lime/20"></div>
+                    <span className="ml-4 text-lime">TRANSACTION_PREVIEW</span>
+                  </div>
+
+                  <div className="space-y-3 text-sm">
+                    <div className="flex justify-between font-mono">
+                      <span className="text-white/60">CREDIT_AMOUNT:</span>
+                      <span className="text-lime tabular-nums">
+                        {BUCKET_AMOUNTS[selectedBucket] / 1e9} SOL
+                      </span>
+                    </div>
+                    <div className="flex justify-between font-mono">
+                      <span className="text-white/60">RELAYER_FEE:</span>
+                      <span className="text-lime tabular-nums">
+                        {(BUCKET_AMOUNTS[selectedBucket] *
+                          RELAYER_FEE_PERCENT) /
+                          100 /
+                          1e9}{" "}
+                        SOL
+                      </span>
+                    </div>
+                    <div className="flex justify-between font-mono">
+                      <span className="text-white/60">FEE_PERCENT:</span>
+                      <span className="text-lime">{RELAYER_FEE_PERCENT}%</span>
+                    </div>
+                    <div className="border-t-2 border-lime/30 pt-3 flex justify-between font-mono">
+                      <span className="text-white font-bold">
+                        TOTAL_PAYMENT:
+                      </span>
+                      <span className="text-lime font-black text-lg tabular-nums">
+                        {(BUCKET_AMOUNTS[selectedBucket] *
+                          (1 + RELAYER_FEE_PERCENT / 100)) /
+                          1e9}{" "}
+                        SOL
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Status messages */}
+                {displayError && (
+                  <div className="border-2 border-red-500 bg-red-500/10 p-4">
+                    <div className="flex items-start gap-2 font-mono text-sm">
+                      <span className="text-red-500">{">"}</span>
                       <div>
-                        <div className="font-semibold">
-                          {credit.amount / 1e9} SOL
+                        <div className="text-red-500 font-bold mb-1">
+                          ERROR:
                         </div>
-                        <div className="text-sm text-gray-500">
-                          {new Date(credit.createdAt).toLocaleDateString()}
-                        </div>
-                      </div>
-                      <div
-                        className={`px-3 py-1 rounded-full text-sm ${
-                          credit.used
-                            ? "bg-gray-700 text-gray-400"
-                            : "bg-green-500/20 text-green-400"
-                        }`}
-                      >
-                        {credit.used ? "Used" : "Available"}
+                        <div className="text-red-400">{displayError}</div>
                       </div>
                     </div>
                   </div>
-                ))}
+                )}
+
+                {purchaseSuccess && (
+                  <div className="border-2 border-lime bg-lime/10 p-4">
+                    <div className="flex items-start gap-2 font-mono text-sm">
+                      <span className="text-lime">{">"}</span>
+                      <div>
+                        <div className="text-lime font-bold mb-1">SUCCESS:</div>
+                        <div className="text-lime/80">
+                          CREDIT_PURCHASED_SUCCESSFULLY
+                        </div>
+                        <div className="text-lime/60 text-xs mt-2">
+                          READY_FOR_ANONYMOUS_DEPOSIT
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Progress */}
+                {isLoading && (
+                  <div className="border-2 border-lime p-4">
+                    <div className="font-mono text-sm text-lime mb-3">
+                      {">"} {getStatusMessage()}
+                    </div>
+                    <div className="h-2 bg-black border-2 border-lime/30 overflow-hidden">
+                      <div
+                        className="h-full bg-lime animate-[pulse_1s_ease-in-out_infinite]"
+                        style={{ width: "60%" }}
+                      ></div>
+                    </div>
+                    <div className="mt-2 font-mono text-xs text-lime/60">
+                      PROCESSING_0x
+                      {Math.random().toString(16).substr(2, 8).toUpperCase()}...
+                    </div>
+                  </div>
+                )}
+
+                {/* Purchase button */}
+                <button
+                  onClick={handlePurchase}
+                  disabled={isLoading}
+                  className="btn-terminal w-full text-lg"
+                >
+                  {isLoading ? "[PROCESSING...]" : "[EXECUTE_PURCHASE]"}
+                </button>
+
+                {/* Your credits */}
+                {credits.length > 0 && (
+                  <div className="border-2 border-lime/20 p-6">
+                    <div className="flex items-center justify-between mb-4">
+                      <span className="font-mono text-sm text-lime">
+                        YOUR_CREDITS:
+                      </span>
+                      <span className="font-mono text-xs text-lime/60">
+                        {availableCredits.length}_AVAILABLE
+                      </span>
+                    </div>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                      {credits.slice(0, 5).map((credit) => (
+                        <div
+                          key={credit.id}
+                          className={`p-3 border-2 font-mono text-sm ${
+                            credit.used
+                              ? "border-white/10 text-white/30"
+                              : "border-lime/30 text-lime/80"
+                          }`}
+                        >
+                          <div className="flex justify-between items-center">
+                            <span className="tabular-nums">
+                              {credit.amount / 1e9} SOL
+                            </span>
+                            <span className="text-xs">
+                              {credit.used ? "[USED]" : "[READY]"}
+                            </span>
+                          </div>
+                          <div className="text-xs text-white/40 mt-1">
+                            {
+                              new Date(credit.createdAt)
+                                .toISOString()
+                                .split("T")[0]
+                            }
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="terminal-box h-full flex items-center justify-center">
+                <div className="text-center">
+                  <div className="text-4xl text-lime/20 mb-4">[ ]</div>
+                  <div className="font-mono text-white/40">
+                    {">"} SELECT_AMOUNT_TO_CONTINUE
+                  </div>
+                </div>
               </div>
             )}
           </div>
-        </>
-      )}
+        </div>
+      </div>
     </div>
   );
 }
