@@ -33,12 +33,17 @@ async function main() {
   const programId = new PublicKey(
     "Dzpj74oeEhpyXwaiLUFKgzVz1Dcj4ZobsoczYdHiMaB3"
   );
-  const idl = JSON.parse(
-    fs.readFileSync(
-      "./programs/privacy_proxy/target/idl/privacy_proxy.json",
-      "utf-8"
-    )
-  );
+
+  // Try multiple possible paths for the IDL file
+  let idlPath = "./target/idl/privacy_proxy.json";
+  if (!fs.existsSync(idlPath)) {
+    idlPath = "./programs/privacy_proxy/target/idl/privacy_proxy.json";
+  }
+  if (!fs.existsSync(idlPath)) {
+    idlPath = "../target/idl/privacy_proxy.json";
+  }
+
+  const idl = JSON.parse(fs.readFileSync(idlPath, "utf-8"));
   const program = new Program(idl, provider) as Program<PrivacyProxy>;
 
   // Derive config PDA
