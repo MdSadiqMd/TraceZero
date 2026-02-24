@@ -82,13 +82,23 @@ pub fn handler(ctx: Context<InitPool>, bucket_id: u8) -> Result<()> {
     Ok(())
 }
 
-/// Get the initial Merkle root for an empty tree
-/// This is the root of a tree with all zero leaves
+/// This must match the SDK's Poseidon-based zero values
+/// The relayer is authoritative for the Merkle tree and uses Poseidon
+/// The on-chain program stores the root provided by the relayer
+/// This is a precomputed constant: the Poseidon hash of zero values, propagated up a tree of depth 20
 fn get_initial_merkle_root() -> [u8; 32] {
-    // For an empty Merkle tree, the root is computed by hashing
-    // zero values up the tree. This should match the circuit
-
-    // In production, this should be a precomputed constant
-    // For now, using zeros as placeholder
-    [0u8; 32]
+    // Precomputed: Poseidon hash of zeros at depth 20
+    // Computed by: privacy-proxy-sdk's MerkleTree::new(20).root()
+    //
+    // This is the result of:
+    // Level 0: [0u8; 32]
+    // Level n: Poseidon(level_{n-1}, level_{n-1})
+    // Repeated 20 times
+    //
+    // Hex: 2134e76ac5d21aab186c2be1dd8f84ee880a1e46eaf712f9d371b6df22191f3e
+    [
+        0x21, 0x34, 0xe7, 0x6a, 0xc5, 0xd2, 0x1a, 0xab, 0x18, 0x6c, 0x2b, 0xe1, 0xdd, 0x8f, 0x84,
+        0xee, 0x88, 0x0a, 0x1e, 0x46, 0xea, 0xf7, 0x12, 0xf9, 0xd3, 0x71, 0xb6, 0xdf, 0x22, 0x19,
+        0x1f, 0x3e,
+    ]
 }
