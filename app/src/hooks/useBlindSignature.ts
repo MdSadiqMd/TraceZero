@@ -131,7 +131,7 @@ export function useBlindSignature() {
         // Extra delay to ensure RPC nodes have synced (devnet can be slow)
         // The relayer will also retry fetching the transaction
         console.log("Waiting for RPC propagation...");
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        await new Promise((resolve) => setTimeout(resolve, 10000));
         setState((s) => ({ ...s, isPaying: false }));
 
         // Step 4: Generate random token ID

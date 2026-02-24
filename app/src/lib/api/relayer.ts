@@ -87,7 +87,8 @@ export interface PendingWithdrawalInfo {
 }
 
 // Request timeout in milliseconds
-const REQUEST_TIMEOUT = 30000;
+// Increased to 120s to handle slow devnet RPC and tree sync operations
+const REQUEST_TIMEOUT = 120000;
 
 // ECDH key pair for request encryption
 let clientKeyPair: CryptoKeyPair | null = null;
