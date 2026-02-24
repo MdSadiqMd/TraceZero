@@ -93,14 +93,25 @@ impl WithdrawalRequest {
             binding_hash,
         };
 
-        // Ideally this would call snarkjs to generate the proof
-        // For now, create a placeholder
+        // ZK proof generation happens in the FRONTEND using WASM (snarkjs)
+        // The SDK is used by the relayer to validate proofs, not generate them
+        // This constructor is only for testing - real proofs come from deserialization
+        #[cfg(test)]
         let proof = ZkProof {
             a: [0u8; 64],
             b: [0u8; 128],
             c: [0u8; 64],
         };
+        #[cfg(not(test))]
+        {
+            let _ = public_inputs; // Suppress unused warning
+            return Err(SdkError::Crypto(
+                "Cannot generate ZK proof in SDK. Proofs must be generated in frontend using WASM. Use deserialization instead."
+                    .into(),
+            ));
+        }
 
+        #[cfg(test)]
         Ok(Self {
             proof,
             public_inputs,
@@ -171,13 +182,26 @@ impl OwnershipProofRequest {
 
         let nullifier_hash = generate_nullifier_hash(nullifier)?;
         let binding_hash = generate_ownership_binding_hash(nullifier, pending_withdrawal_id)?;
-        // In production, generate actual proof
+
+        // ZK proof generation happens in the FRONTEND using WASM (snarkjs)
+        // The SDK is used by the relayer to validate proofs, not generate them
+        // This constructor is only for testing - real proofs come from deserialization
+        #[cfg(test)]
         let proof = ZkProof {
             a: [0u8; 64],
             b: [0u8; 128],
             c: [0u8; 64],
         };
+        #[cfg(not(test))]
+        {
+            let _ = (nullifier_hash, binding_hash); // Suppress unused warnings
+            return Err(SdkError::Crypto(
+                "Cannot generate ZK proof in SDK. Proofs must be generated in frontend using WASM. Use deserialization instead."
+                    .into(),
+            ));
+        }
 
+        #[cfg(test)]
         Ok(Self {
             proof,
             nullifier_hash,
