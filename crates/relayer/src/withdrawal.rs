@@ -452,6 +452,37 @@ impl WithdrawalService {
                 })?;
             info!("✓ Recipient pre-funded");
             prefunded = true;
+        } else {
+            // Check if existing account has enough balance for rent
+            let account = self.rpc_client.get_account(&record.recipient).await?;
+            if account.lamports < rent_exempt_minimum {
+                let needed = rent_exempt_minimum - account.lamports;
+                info!(
+                    "Recipient {} exists but needs {} more lamports for rent exemption",
+                    record.recipient, needed
+                );
+                let topup_tx = Transaction::new_signed_with_payer(
+                    &[solana_sdk::system_instruction::transfer(
+                        &relayer.pubkey(),
+                        &record.recipient,
+                        needed,
+                    )],
+                    Some(&relayer.pubkey()),
+                    &[relayer.as_ref()],
+                    self.rpc_client.get_latest_blockhash().await?,
+                );
+                self.rpc_client
+                    .send_and_confirm_transaction(&topup_tx)
+                    .await
+                    .map_err(|e| {
+                        RelayerError::TransactionFailed(format!(
+                            "Failed to top up recipient: {}",
+                            e
+                        ))
+                    })?;
+                info!("✓ Recipient topped up");
+                prefunded = true;
+            }
         }
 
         let treasury_exists = self.rpc_client.get_account(&relayer_treasury).await.is_ok();
@@ -478,6 +509,34 @@ impl WithdrawalService {
                 })?;
             info!("✓ Treasury pre-funded");
             prefunded = true;
+        } else {
+            // Check if existing treasury has enough balance for rent
+            let account = self.rpc_client.get_account(&relayer_treasury).await?;
+            if account.lamports < rent_exempt_minimum {
+                let needed = rent_exempt_minimum - account.lamports;
+                info!(
+                    "Treasury {} exists but needs {} more lamports for rent exemption",
+                    relayer_treasury, needed
+                );
+                let topup_tx = Transaction::new_signed_with_payer(
+                    &[solana_sdk::system_instruction::transfer(
+                        &relayer.pubkey(),
+                        &relayer_treasury,
+                        needed,
+                    )],
+                    Some(&relayer.pubkey()),
+                    &[relayer.as_ref()],
+                    self.rpc_client.get_latest_blockhash().await?,
+                );
+                self.rpc_client
+                    .send_and_confirm_transaction(&topup_tx)
+                    .await
+                    .map_err(|e| {
+                        RelayerError::TransactionFailed(format!("Failed to top up treasury: {}", e))
+                    })?;
+                info!("✓ Treasury topped up");
+                prefunded = true;
+            }
         }
 
         // Small delay to ensure pre-funded accounts are fully settled
@@ -510,6 +569,29 @@ impl WithdrawalService {
             recent_blockhash,
         );
 
+        // First simulate to get detailed error
+        match self.rpc_client.simulate_transaction(&transaction).await {
+            Ok(sim_result) => {
+                if let Some(err) = sim_result.value.err {
+                    error!("Simulation failed: {:?}", err);
+                    if let Some(logs) = sim_result.value.logs {
+                        error!("Simulation logs:");
+                        for log in logs {
+                            error!("  {}", log);
+                        }
+                    }
+                    return Err(RelayerError::TransactionFailed(format!(
+                        "Simulation failed: {:?}",
+                        err
+                    )));
+                }
+                info!("Simulation succeeded, sending transaction...");
+            }
+            Err(e) => {
+                warn!("Could not simulate transaction: {}", e);
+            }
+        }
+
         // Send transaction with better error handling
         let signature = match self
             .rpc_client
@@ -526,11 +608,6 @@ impl WithdrawalService {
             Ok(sig) => sig,
             Err(e) => {
                 let error_msg = e.to_string();
-                if error_msg.contains("0x0") {
-                    return Err(RelayerError::TransactionFailed(
-                        "Transaction failed with error 0x0. This usually means an account doesn't have enough lamports for rent. Please try again.".to_string()
-                    ));
-                }
                 return Err(RelayerError::TransactionFailed(format!(
                     "Withdrawal execution failed: {}",
                     error_msg
