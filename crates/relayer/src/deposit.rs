@@ -9,11 +9,12 @@ use solana_sdk::{
     system_program::ID as SYSTEM_PROGRAM_ID,
     transaction::Transaction,
 };
+use solana_transaction_status::UiTransactionEncoding;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 use crate::blind_signer::BlindSignerService;
 use crate::config::{get_bucket_id, RelayerConfig};
@@ -186,6 +187,12 @@ impl DepositService {
         }
     }
 
+    fn get_pool_pda(&self, bucket_id: u8) -> Pubkey {
+        let (pool_pda, _) =
+            Pubkey::find_program_address(&[b"pool", &[bucket_id]], &self.config.program_id);
+        pool_pda
+    }
+
     pub async fn handle_deposit(&self, request: DepositRequest) -> Result<DepositResponse> {
         // 1. Verify the signed credit
         self.verify_credit(&request.credit).await?;
@@ -244,6 +251,7 @@ impl DepositService {
             success: true,
             tx_signature: Some(tx_signature),
             leaf_index: Some(leaf_index),
+            merkle_root: Some(hex::encode(merkle_root)),
             error: None,
         })
     }
@@ -277,21 +285,176 @@ impl DepositService {
     async fn sync_local_tree(&self, bucket_id: u8, on_chain_size: u64) -> Result<()> {
         let local_size = self.merkle_service.size(bucket_id).await.unwrap_or(0) as u64;
         if local_size > on_chain_size {
-            warn!(
-                "Local tree has more entries ({}) than on-chain ({}). Resetting local tree.",
+            error!(
+                "Local tree has more entries ({}) than on-chain ({}). This should never happen! Resetting local tree.",
                 local_size, on_chain_size
             );
             // Re-initialize the tree (this will clear it)
             self.merkle_service
                 .sync_from_chain(bucket_id, vec![])
                 .await?;
-        } else if local_size < on_chain_size {
+
+            // After reset, we need to fetch all on-chain commitments
+            if on_chain_size > 0 {
+                warn!(
+                    "Fetching {} commitments from on-chain to rebuild tree...",
+                    on_chain_size
+                );
+            }
+        }
+
+        // Fetch missing commitments from transaction history
+        let current_local_size = self.merkle_service.size(bucket_id).await.unwrap_or(0) as u64;
+        if current_local_size < on_chain_size {
             warn!(
-                "On-chain has more entries ({}) than local ({}). Some deposits may be missing from local tree.",
-                on_chain_size, local_size
+                "On-chain has {} entries, local has {}. Fetching missing commitments from transaction history...",
+                on_chain_size, current_local_size
             );
-            // In a production system, you'd want to fetch the missing commitments
-            // from on-chain events or a backup source
+
+            let pool_pda = self.get_pool_pda(bucket_id);
+
+            // Fetch transaction signatures for the pool account
+            let signatures = self
+                .rpc_client
+                .get_signatures_for_address(&pool_pda)
+                .await
+                .map_err(|e| {
+                    RelayerError::TransactionFailed(format!(
+                        "Failed to fetch transaction history: {}",
+                        e
+                    ))
+                })?;
+
+            info!(
+                "Found {} transactions for pool {}",
+                signatures.len(),
+                bucket_id
+            );
+
+            // OPTIMIZATION: If there are too many transactions (>50), skip the slow scan
+            // This prevents 20+ second delays on devnet where logs are often pruned anyway
+            if signatures.len() > 50 {
+                warn!(
+                    "Too many transactions ({}) to scan efficiently. Skipping history scan.",
+                    signatures.len()
+                );
+                warn!("⚠ CONTINUING WITH EMPTY TREE - Old deposits (if any) will NOT be withdrawable!");
+                warn!("⚠ The relayer will track new deposits from this point forward.");
+                warn!("⚠ If you need to recover old deposits, you must restore the merkle_state/ from backup.");
+
+                // Reset the tree to empty and continue
+                self.merkle_service
+                    .sync_from_chain(bucket_id, vec![])
+                    .await?;
+
+                return Ok(());
+            }
+
+            // Parse deposit events from transaction logs (only scan recent transactions)
+            let mut commitments = Vec::new();
+            for sig_info in signatures.iter().rev().take(20) {
+                // Only scan last 20 transactions
+                // Skip failed transactions
+                if sig_info.err.is_some() {
+                    continue;
+                }
+
+                // Fetch full transaction to get logs
+                let signature = sig_info.signature.parse().map_err(|e| {
+                    RelayerError::InvalidRequest(format!("Invalid signature: {}", e))
+                })?;
+
+                match self
+                    .rpc_client
+                    .get_transaction(&signature, UiTransactionEncoding::Json)
+                    .await
+                {
+                    Ok(tx) => {
+                        if let Some(meta) = tx.transaction.meta {
+                            let log_messages: Option<Vec<String>> = meta.log_messages.into();
+                            if let Some(logs) = log_messages {
+                                for log in logs {
+                                    if log.contains("Program log: Deposit: commitment=") {
+                                        if let Some(hex_start) = log.find("commitment=") {
+                                            let hex_str = &log[hex_start + 11..];
+                                            // Extract 64 hex chars (32 bytes)
+                                            if hex_str.len() >= 64 {
+                                                let commitment_hex = &hex_str[..64];
+                                                match hex::decode(commitment_hex) {
+                                                    Ok(bytes) if bytes.len() == 32 => {
+                                                        let mut commitment = [0u8; 32];
+                                                        commitment.copy_from_slice(&bytes);
+                                                        commitments.push(commitment);
+                                                        info!(
+                                                            "Found commitment from tx {}: {}",
+                                                            signature, commitment_hex
+                                                        );
+                                                    }
+                                                    _ => {
+                                                        warn!(
+                                                            "Invalid commitment hex in log: {}",
+                                                            commitment_hex
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to fetch transaction {}: {}", signature, e);
+                    }
+                }
+            }
+
+            if commitments.is_empty() {
+                warn!(
+                    "Could not find any commitments in transaction history for bucket {}",
+                    bucket_id
+                );
+                warn!("This may happen if transactions are too old or logs are not available.");
+
+                // IMPORTANT: Instead of returning an error, we'll continue with a warning
+                // This allows the relayer to start accepting new deposits even if old ones can't be recovered
+                warn!(
+                    "⚠ CONTINUING WITH EMPTY TREE - Old deposits (if any) will NOT be withdrawable!"
+                );
+                warn!("⚠ The relayer will track new deposits from this point forward.");
+                warn!(
+                    "⚠ If you need to recover old deposits, you must restore the merkle_state/ from backup."
+                );
+
+                // Reset the tree to empty and continue
+                self.merkle_service
+                    .sync_from_chain(bucket_id, vec![])
+                    .await?;
+
+                return Ok(());
+            }
+
+            info!(
+                "Found {} commitments from transaction history",
+                commitments.len()
+            );
+
+            // Rebuild local tree with found commitments
+            self.merkle_service
+                .sync_from_chain(bucket_id, commitments)
+                .await?;
+
+            let new_local_size = self.merkle_service.size(bucket_id).await.unwrap_or(0) as u64;
+            if new_local_size != on_chain_size {
+                warn!(
+                    "After sync: local size {} still doesn't match on-chain size {}",
+                    new_local_size, on_chain_size
+                );
+                warn!("Some commitments may be missing from transaction history.");
+            } else {
+                info!("✓ Successfully synced local tree with on-chain state");
+            }
         }
 
         Ok(())

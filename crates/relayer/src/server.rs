@@ -310,40 +310,8 @@ async fn sign_blinded(
     // Verify payment on-chain
     let relayer_pubkey = state.config.keypair.pubkey();
 
-    // First check if transaction exists using getSignatureStatuses (faster)
-    info!("Checking transaction status for {}", payment_sig);
-    let status_result = state
-        .rpc_client
-        .get_signature_statuses(&[payment_sig])
-        .await
-        .map_err(|e| {
-            RelayerError::InvalidRequest(format!(
-                "Failed to check transaction status: {}. RPC might be unavailable.",
-                e
-            ))
-        })?;
-
-    if let Some(status_opt) = status_result.value.first() {
-        if let Some(status) = status_opt {
-            if status.err.is_some() {
-                return Err(RelayerError::InvalidRequest(
-                    "Payment transaction failed on-chain".into(),
-                ));
-            }
-            info!("Transaction status confirmed, fetching full transaction...");
-        } else {
-            return Err(RelayerError::InvalidRequest(
-                "Payment transaction not found. Make sure it's confirmed and wait a few seconds."
-                    .into(),
-            ));
-        }
-    } else {
-        return Err(RelayerError::InvalidRequest(
-            "Could not verify transaction status".into(),
-        ));
-    }
-
-    // Fetch full transaction with retries (devnet can be slow)
+    // Fetch transaction with retries (devnet can be slow)
+    info!("Fetching payment transaction: {}", payment_sig);
     let mut tx_result = None;
     for attempt in 0..10 {
         match state
