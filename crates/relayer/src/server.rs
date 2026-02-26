@@ -174,7 +174,7 @@ struct InfoResponse {
     pub_key_e: String,
     /// X25519 public key for ECDH (hex)
     ecdh_pubkey: String,
-    /// Relayer's Solana pubkey (base58)
+    /// Treasury Solana pubkey for credit payments (base58)
     solana_pubkey: String,
     /// Fee in basis points
     fee_bps: u16,
@@ -260,8 +260,8 @@ async fn get_info(State(state): State<Arc<RelayerState>>) -> Json<InfoResponse> 
     tracing::debug!("got pub_key_e: {} bytes", pub_key_e.len());
     let ecdh_pubkey = hex::encode(state.ecdh_pubkey.as_bytes());
     tracing::debug!("got ecdh_pubkey: {} bytes", ecdh_pubkey.len());
-    let solana_pubkey = state.config.keypair.pubkey().to_string();
-    tracing::debug!("got solana_pubkey: {}", solana_pubkey);
+    let solana_pubkey = state.config.treasury_keypair.pubkey().to_string();
+    tracing::debug!("got solana_pubkey (treasury): {}", solana_pubkey);
 
     let buckets: Vec<BucketInfo> = BUCKET_AMOUNTS
         .iter()
@@ -307,8 +307,8 @@ async fn sign_blinded(
     let payer_pubkey = solana_sdk::pubkey::Pubkey::from_str(&req.payer)
         .map_err(|_| RelayerError::InvalidRequest("Invalid payer public key".into()))?;
 
-    // Verify payment on-chain
-    let relayer_pubkey = state.config.keypair.pubkey();
+    // Verify payment on-chain against TREASURY wallet (not deposit wallet)
+    let relayer_pubkey = state.config.treasury_keypair.pubkey();
 
     // Fetch transaction with retries (devnet can be slow)
     info!("Fetching payment transaction: {}", payment_sig);

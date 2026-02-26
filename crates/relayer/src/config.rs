@@ -1,4 +1,4 @@
-use solana_sdk::{pubkey::Pubkey, signature::Keypair};
+use solana_sdk::{pubkey::Pubkey, signature::Keypair, signer::Signer};
 use std::str::FromStr;
 
 pub const BUCKET_AMOUNTS: [u64; 7] = [
@@ -15,6 +15,7 @@ pub const BUCKET_AMOUNTS: [u64; 7] = [
 pub struct RelayerConfig {
     pub rpc_url: String,
     pub keypair: std::sync::Arc<Keypair>,
+    pub treasury_keypair: std::sync::Arc<Keypair>,
     pub program_id: Pubkey,
     pub zk_verifier_id: Pubkey,
     pub host: String,
@@ -34,6 +35,30 @@ impl RelayerConfig {
             .map_err(|e| anyhow::anyhow!("Failed to read keypair from {}: {}", keypair_path, e))?;
         let keypair_json: Vec<u8> = serde_json::from_slice(&keypair_bytes)?;
         let keypair = Keypair::try_from(&keypair_json[..])?;
+
+        let treasury_keypair = if let Ok(treasury_path) = std::env::var("TREASURY_KEYPAIR_PATH") {
+            let treasury_bytes = std::fs::read(&treasury_path).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to read treasury keypair from {}: {}",
+                    treasury_path,
+                    e
+                )
+            })?;
+            let treasury_json: Vec<u8> = serde_json::from_slice(&treasury_bytes)?;
+            let tk = Keypair::try_from(&treasury_json[..])?;
+            tracing::info!(
+                "Treasury wallet loaded: {} (separate from deposit wallet: {})",
+                tk.pubkey(),
+                keypair.pubkey()
+            );
+            tk
+        } else {
+            tracing::warn!(
+                "TREASURY_KEYPAIR_PATH not set! Using main keypair for credit payments. \
+                 This is a PRIVACY RISK - set TREASURY_KEYPAIR_PATH to a separate wallet."
+            );
+            Keypair::try_from(&keypair.to_bytes()[..])?
+        };
 
         let program_id = std::env::var("PROGRAM_ID")
             .map(|s| Pubkey::from_str(&s))
@@ -66,6 +91,7 @@ impl RelayerConfig {
         Ok(Self {
             rpc_url,
             keypair: std::sync::Arc::new(keypair),
+            treasury_keypair: std::sync::Arc::new(treasury_keypair),
             program_id,
             zk_verifier_id,
             host,
