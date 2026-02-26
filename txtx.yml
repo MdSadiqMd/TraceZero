@@ -17,3 +17,6 @@ environments:
     rpc_api_url: https://api.devnet.solana.com
     payer_keypair_json: ~/.config/solana/id.json
     authority_keypair_json: ~/.config/solana/id.json
+# Disable auto-deployment on surfpool start
+# Programs will be loaded manually via --bpf-program flags
+disable_auto_deploy: true

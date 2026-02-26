@@ -10,18 +10,16 @@ addon "svm" {
 // Deploy privacy_proxy program to simnet
 action "load_privacy_proxy" "svm::deploy_program" {
     description = "Load privacy_proxy program"
-    program = svm::get_program_from_anchor_project("privacy_proxy") 
-    authority = signer.authority
-    payer = signer.payer
+    program_path = "programs/privacy_proxy/target/deploy/privacy_proxy.so"
+    program_id = "Dzpj74oeEhpyXwaiLUFKgzVz1Dcj4ZobsoczYdHiMaB3"
     instant_surfnet_deployment = true
 }
 
 // Deploy zk_verifier program to simnet
 action "load_zk_verifier" "svm::deploy_program" {
     description = "Load zk_verifier program"
-    program = svm::get_program_from_anchor_project("zk_verifier") 
-    authority = signer.authority
-    payer = signer.payer
+    program_path = "programs/privacy_proxy/target/deploy/zk_verifier.so"
+    program_id = "AL6EfrDUdBdwqwrrA1gsq3KwfSJs4wLq4BKyABAzsqvA"
     instant_surfnet_deployment = true
 }
 
