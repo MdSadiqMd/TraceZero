@@ -4,6 +4,7 @@ members = [
     "crates/network",
     "crates/privacy-proxy-sdk",
     "crates/relayer",
+    "crates/tracer",
 ]
 
 [workspace.package]
