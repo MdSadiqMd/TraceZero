@@ -100,6 +100,7 @@ pub struct DepositResponse {
     pub success: bool,
     pub tx_signature: Option<String>,
     pub leaf_index: Option<u64>,
+    pub merkle_root: Option<String>,
     pub error: Option<String>,
 }
 

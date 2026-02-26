@@ -286,4 +286,27 @@ mod tests {
 
         assert!(MerkleTree::verify_proof(&root, &leaf, &proof).unwrap());
     }
+
+    #[test]
+    fn print_initial_root() {
+        // Print the initial root for an empty tree of depth 20
+        // This is used to generate the constant in init_pool.rs
+        let tree = MerkleTree::new(TREE_DEPTH).unwrap();
+        let root = tree.root().unwrap();
+
+        println!("\nInitial Merkle root (depth {}):", TREE_DEPTH);
+        println!("Hex: {}", hex::encode(root));
+        println!("\nRust array format:");
+        print!("[");
+        for (i, byte) in root.iter().enumerate() {
+            if i > 0 {
+                print!(", ");
+            }
+            if i % 8 == 0 && i > 0 {
+                print!("\n        ");
+            }
+            print!("0x{:02x}", byte);
+        }
+        println!("\n    ]");
+    }
 }
