@@ -25,6 +25,9 @@ target
 rsa_signing_key.der
 **/rsa_signing_key.der
 
+# Treasury wallet keypair (PRIVACY-CRITICAL: separate from deposit wallet)
+treasury.json
+
 # Solana program keypairs (upgrade authority), if leaked, anyone can upgrade your programs
 *-keypair.json
 **/*-keypair.json
