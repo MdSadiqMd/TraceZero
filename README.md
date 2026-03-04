@@ -1,6 +1,12 @@
 # TraceZero
 Privacy-preserving transactions on Solana using ZK proofs, blind signatures, and Tor routing
 
+## Demo Video
+
+<video src="docs/tracezero_presentation.mp4" controls width="100%">
+  Your browser does not support the video tag. <a href="docs/tracezero_presentation.mp4">Download the video</a>
+</video>
+
 ## Architecture
 
 ### Protocol Flow
