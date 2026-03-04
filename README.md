@@ -2,10 +2,38 @@
 Privacy-preserving transactions on Solana using ZK proofs, blind signatures, and Tor routing
 
 ## Demo Video
+<div>
+  <a 
+  href="https://www.youtube.com/watch?v=GiYUNCKu6SA"
+  style="
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+    color: #3b82f6;
+    font-weight: 600;
+  "
+  >
+    <img 
+        src="https://img.icons8.com/color/96/youtube-play.png" 
+        width="24"
+        height="24"
+        style="
+        display: block;
+        transform: translateY(-1px);
+        "
+    />
+    Watch Full Video on YouTube
+  </a>
 
-<video src="docs/tracezero_presentation.mp4" controls width="100%">
-  Your browser does not support the video tag. <a href="docs/tracezero_presentation.mp4">Download the video</a>
-</video>
+  <a href="https://www.youtube.com/watch?v=GiYUNCKu6SA">
+    <img 
+      src="https://img.youtube.com/vi/GiYUNCKu6SA/maxresdefault.jpg" 
+      alt="TraceZero Demo" 
+      style="width:100%; max-width:800px;"
+    />
+  </a>
+</div>
 
 ## Architecture
 
