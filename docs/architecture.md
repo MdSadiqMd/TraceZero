@@ -656,8 +656,8 @@ sequenceDiagram
     
     Solana-->>Recipient: SOL received at stealth address
     
-    Note over User: v6: Stealth keypair saved in localStorage
-    dApp->>dApp: Store stealth keypair for later claim
+    Note over User: v6: Stealth keypair saved in ENCRYPTED localStorage
+    dApp->>dApp: Store stealth keypair encrypted with AES-256-GCM
 ```
 
 **What Solscan shows:**
@@ -683,11 +683,11 @@ User → Claim Page → Select stealth address → Enter destination → Sign wi
 
 **Key properties**:
 - Plain `SystemProgram.transfer` — no ZK proof, no relayer, no Tor
-- Signed with the stealth keypair (saved in localStorage during withdrawal)
+- Signed with the stealth keypair (saved ENCRYPTED in localStorage during withdrawal)
 - The stealth → destination link is visible on-chain, but stealth → deposit is broken by ZK
 - An observer sees "random address sent SOL to destination" — no link to the privacy pool
 
-**What gets stored per withdrawal** (in `localStorage`):
+**What gets stored per withdrawal** (ENCRYPTED in `localStorage` with AES-256-GCM):
 ```json
 {
   "stealthAddress": "base58...",
@@ -699,7 +699,14 @@ User → Claim Page → Select stealth address → Enter destination → Sign wi
 }
 ```
 
-**Backup**: Users can export/import stealth keys as JSON from the Claim page. Critical before clearing localStorage.
+**Security**: 
+- All stealth keys encrypted with user password (AES-256-GCM + PBKDF2 100k iterations)
+- Password set on first withdrawal via Withdraw page UI
+- Auto-unlock during session via sessionStorage
+- Lock/unlock UI on Claim page
+- Migration from old plaintext data handled automatically
+
+**Backup**: Users can export/import stealth keys as encrypted `.enc` files from the Claim page. Critical before clearing localStorage.
 
 ### 5.3 Stealth Address Generation (Off-Chain)
 
