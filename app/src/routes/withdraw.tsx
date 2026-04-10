@@ -29,8 +29,54 @@ function WithdrawPage() {
   const [executeError, setExecuteError] = useState<string | null>(null);
   const [executeTx, setExecuteTx] = useState<string | null>(null);
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+  
+  // Password management state
+  const [showPasswordSetup, setShowPasswordSetup] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [passwordSet, setPasswordSet] = useState(false);
 
   const availableDeposits = deposits.filter((d) => !d.withdrawn);
+
+  // Check if password is already set on mount
+  useEffect(() => {
+    const checkPassword = async () => {
+      const { secureStealthStorage } = await import("@/lib/crypto/secureStorage");
+      
+      // Check if storage is initialized (unlocked with password)
+      const isInit = secureStealthStorage.isInitialized();
+      
+      // Check if there's a session password
+      const hasSessionPassword = sessionStorage.getItem("stealth-session-password") !== null;
+      
+      if (isInit || hasSessionPassword) {
+        setPasswordSet(true);
+      }
+    };
+    checkPassword();
+  }, []);
+
+  const handleSetPassword = () => {
+    setPasswordError(null);
+    
+    if (!password || password.length < 8) {
+      setPasswordError("PASSWORD_MUST_BE_AT_LEAST_8_CHARACTERS");
+      return;
+    }
+    
+    if (password !== confirmPassword) {
+      setPasswordError("PASSWORDS_DO_NOT_MATCH");
+      return;
+    }
+    
+    // Store password in sessionStorage for withdrawal to use
+    sessionStorage.setItem("stealth-session-password", password);
+    setPasswordSet(true);
+    setShowPasswordSetup(false);
+    setPassword("");
+    setConfirmPassword("");
+  };
 
   const fetchPending = useCallback(async () => {
     try {
@@ -257,6 +303,99 @@ function WithdrawPage() {
             </button>
           </div>
         </div>
+
+        {/* Password Setup */}
+        {!passwordSet && (
+          <div className="border-2 border-lime/30 bg-lime/5 p-6 mb-8">
+            <div className="flex items-start gap-3 mb-4">
+              <span className="text-lime text-2xl">🔒</span>
+              <div>
+                <div className="font-mono text-lime font-bold mb-2">
+                  PASSWORD_REQUIRED_FOR_STEALTH_KEYS
+                </div>
+                <div className="font-mono text-sm text-white/60 mb-4">
+                  {">"} STEALTH_KEYS_WILL_BE_ENCRYPTED_IN_LOCALSTORAGE
+                  <br />
+                  {">"} YOU_NEED_THIS_PASSWORD_TO_CLAIM_FUNDS_LATER
+                  <br />
+                  {">"} SET_PASSWORD_BEFORE_WITHDRAWAL
+                </div>
+                {!showPasswordSetup ? (
+                  <button
+                    onClick={() => setShowPasswordSetup(true)}
+                    className="border-2 border-lime text-lime px-4 py-2 font-mono font-bold text-sm hover:bg-lime hover:text-black transition-colors"
+                  >
+                    [SET_PASSWORD]
+                  </button>
+                ) : (
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block font-mono text-xs text-lime/60 mb-2">
+                        PASSWORD (MIN 8 CHARS):
+                      </label>
+                      <input
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full bg-black border-2 border-lime/30 px-4 py-2 font-mono text-sm text-white focus:border-lime focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-mono text-xs text-lime/60 mb-2">
+                        CONFIRM_PASSWORD:
+                      </label>
+                      <input
+                        type="password"
+                        value={confirmPassword}
+                        onChange={(e) => setConfirmPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full bg-black border-2 border-lime/30 px-4 py-2 font-mono text-sm text-white focus:border-lime focus:outline-none"
+                      />
+                    </div>
+                    {passwordError && (
+                      <div className="border-2 border-red-500 bg-red-500/10 p-3">
+                        <div className="font-mono text-sm text-red-400">
+                          {">"} {passwordError}
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex gap-3">
+                      <button
+                        onClick={handleSetPassword}
+                        className="border-2 border-lime text-lime px-4 py-2 font-mono font-bold text-sm hover:bg-lime hover:text-black transition-colors"
+                      >
+                        [CONFIRM]
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowPasswordSetup(false);
+                          setPassword("");
+                          setConfirmPassword("");
+                          setPasswordError(null);
+                        }}
+                        className="border-2 border-lime/30 text-lime/60 px-4 py-2 font-mono font-bold text-sm hover:bg-lime/10 transition-colors"
+                      >
+                        [CANCEL]
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {passwordSet && (
+          <div className="border-2 border-lime/30 bg-lime/5 p-4 mb-8">
+            <div className="flex items-center gap-3">
+              <span className="text-lime text-xl">✓</span>
+              <div className="font-mono text-sm text-lime">
+                PASSWORD_SET // STEALTH_KEYS_WILL_BE_ENCRYPTED
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Pending Withdrawals */}
         <PendingSection

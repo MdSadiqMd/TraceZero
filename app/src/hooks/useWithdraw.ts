@@ -10,6 +10,7 @@ import {
 import { PublicKey } from "@solana/web3.js";
 import { BUCKET_AMOUNTS, RELAYER_URL } from "@/lib/constants";
 import {
+  secureStealthStorage,
   addStealthKey,
   type StoredStealthKey,
 } from "@/lib/crypto/secureStorage";
@@ -371,11 +372,48 @@ export function useWithdraw() {
             createdAt: Date.now(),
             swept: false,
           };
-          addStealthKey(entry);
-          console.log(
-            "✓ Stealth keypair saved for later sweep:",
-            entry.stealthAddress,
-          );
+          
+          // Try to save to secure storage
+          try {
+            // Check if storage is initialized
+            if (!secureStealthStorage.isInitialized()) {
+              // Try auto-initialize from session
+              const autoUnlocked = await secureStealthStorage.tryAutoInitialize();
+              
+              if (!autoUnlocked) {
+                // Prompt for password to initialize storage
+                const password = prompt(
+                  "SET_PASSWORD_TO_ENCRYPT_STEALTH_KEYS:\n\n" +
+                  "This password will protect your stealth private keys.\n" +
+                  "You'll need it to claim funds later.\n\n" +
+                  "Minimum 8 characters:"
+                );
+                
+                if (!password || password.length < 8) {
+                  console.error("Password required (min 8 chars) to save stealth key");
+                  throw new Error("Password required to save stealth key");
+                }
+                
+                const confirmPassword = prompt("CONFIRM_PASSWORD:");
+                if (password !== confirmPassword) {
+                  throw new Error("Passwords do not match");
+                }
+                
+                await secureStealthStorage.initialize(password);
+              }
+            }
+            
+            await secureStealthStorage.addKey(entry);
+            console.log(
+              "✓ Stealth keypair saved (encrypted) for later sweep:",
+              entry.stealthAddress,
+            );
+          } catch (error) {
+            console.error("Failed to save stealth key:", error);
+            // Fallback to deprecated plaintext storage with warning
+            console.warn("SECURITY WARNING: Falling back to plaintext storage");
+            addStealthKey(entry);
+          }
         }
 
         setState({

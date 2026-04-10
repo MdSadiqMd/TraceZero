@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   Connection,
   Keypair,
@@ -8,12 +8,9 @@ import {
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import {
-  getStealthKeys,
-  getUnsweptStealthKeys,
-  markStealthKeySwept,
-  exportStealthKeys,
-  importStealthKeys,
-  clearAllStealthKeys,
+  secureStealthStorage,
+  exportStealthKeysEncrypted,
+  importStealthKeysEncrypted,
   type StoredStealthKey,
 } from "@/lib/crypto/secureStorage";
 import { SOLANA_RPC_URL } from "@/lib/constants";
@@ -29,13 +26,44 @@ export function useClaim() {
   const [loading, setLoading] = useState(false);
   const [claiming, setClaiming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isUnlocked, setIsUnlocked] = useState(false);
+
+  // Try to auto-unlock from session on mount
+  useEffect(() => {
+    const tryUnlock = async () => {
+      const unlocked = await secureStealthStorage.tryAutoInitialize();
+      setIsUnlocked(unlocked);
+    };
+    tryUnlock();
+  }, []);
+
+  const unlock = useCallback(async (password: string): Promise<boolean> => {
+    try {
+      const success = await secureStealthStorage.initialize(password);
+      setIsUnlocked(success);
+      return success;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const lock = useCallback(() => {
+    secureStealthStorage.lock();
+    setIsUnlocked(false);
+    setEntries([]);
+  }, []);
 
   const refresh = useCallback(async () => {
+    if (!isUnlocked) {
+      setError("Storage locked. Please unlock first.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
       const conn = new Connection(RPC_URL, "confirmed");
-      const keys = getUnsweptStealthKeys();
+      const keys = secureStealthStorage.getUnsweptKeys();
       const results: ClaimableEntry[] = [];
 
       for (const k of keys) {
@@ -56,15 +84,19 @@ export function useClaim() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [isUnlocked]);
 
   const claim = useCallback(
     async (stealthAddress: string, destination: string): Promise<string> => {
+      if (!isUnlocked) {
+        throw new Error("Storage locked. Please unlock first.");
+      }
+
       setClaiming(stealthAddress);
       setError(null);
       try {
         const conn = new Connection(RPC_URL, "confirmed");
-        const all = getStealthKeys();
+        const all = secureStealthStorage.getKeys();
         const entry = all.find((k) => k.stealthAddress === stealthAddress);
         if (!entry) throw new Error("Stealth key not found");
 
@@ -100,7 +132,7 @@ export function useClaim() {
         );
 
         const sig = await sendAndConfirmTransaction(conn, tx, [stealthKp]);
-        markStealthKeySwept(stealthAddress, sig);
+        await secureStealthStorage.markSwept(stealthAddress, sig);
 
         // Update local state
         setEntries((prev) =>
@@ -116,18 +148,27 @@ export function useClaim() {
         setClaiming(null);
       }
     },
-    [],
+    [isUnlocked],
   );
+
+  const clearKeys = useCallback(() => {
+    secureStealthStorage.clear();
+    setIsUnlocked(false);
+    setEntries([]);
+  }, []);
 
   return {
     entries,
     loading,
     claiming,
     error,
+    isUnlocked,
+    unlock,
+    lock,
     refresh,
     claim,
-    exportKeys: exportStealthKeys,
-    importKeys: importStealthKeys,
-    clearKeys: clearAllStealthKeys,
+    exportKeys: exportStealthKeysEncrypted,
+    importKeys: importStealthKeysEncrypted,
+    clearKeys,
   };
 }

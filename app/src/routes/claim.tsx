@@ -14,6 +14,9 @@ function ClaimPage() {
     loading,
     claiming,
     error,
+    isUnlocked,
+    unlock,
+    lock,
     refresh,
     claim,
     exportKeys,
@@ -26,16 +29,44 @@ function ClaimPage() {
   const [showBackup, setShowBackup] = useState(false);
   const [importText, setImportText] = useState("");
   const [importResult, setImportResult] = useState<string | null>(null);
+  const [unlockPassword, setUnlockPassword] = useState("");
+  const [unlockError, setUnlockError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
+  const handleUnlock = async () => {
+    if (!unlockPassword) {
+      setUnlockError("PASSWORD_REQUIRED");
+      return;
+    }
+
+    const success = await unlock(unlockPassword);
+    if (success) {
+      setUnlockPassword("");
+      setUnlockError(null);
+      refresh();
+    } else {
+      setUnlockError("WRONG_PASSWORD");
+    }
+  };
+
+  const handleLock = () => {
+    lock();
+    setUnlockPassword("");
+    setUnlockError(null);
+  };
 
   useEffect(() => {
-    const interval = setInterval(refresh, 10000);
-    return () => clearInterval(interval);
-  }, [refresh]);
+    if (isUnlocked) {
+      refresh();
+    }
+  }, [refresh, isUnlocked]);
+
+  useEffect(() => {
+    if (isUnlocked) {
+      const interval = setInterval(refresh, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [refresh, isUnlocked]);
 
   useEffect(() => {
     if (publicKey && destination === "") {
@@ -61,39 +92,76 @@ function ClaimPage() {
     }
   };
 
-  const handleExport = () => {
-    const data = exportKeys();
-    const blob = new Blob([data], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `stealth-keys-backup-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const handleExport = async () => {
+    const password = prompt(
+      "ENTER_PASSWORD_TO_ENCRYPT_BACKUP:\n\n⚠ REMEMBER_THIS_PASSWORD!\nYOU_WILL_NEED_IT_TO_RESTORE_YOUR_KEYS"
+    );
+    if (!password) return;
+    
+    if (password.length < 8) {
+      alert("PASSWORD_MUST_BE_AT_LEAST_8_CHARACTERS");
+      return;
+    }
+    
+    const confirmPassword = prompt("CONFIRM_PASSWORD:");
+    if (password !== confirmPassword) {
+      alert("PASSWORDS_DO_NOT_MATCH");
+      return;
+    }
+    
+    try {
+      const data = await exportKeys(password);
+      const blob = new Blob([data], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `stealth-keys-backup-${Date.now()}.enc`;
+      a.click();
+      URL.revokeObjectURL(url);
+      
+      alert("✓ BACKUP_CREATED_SUCCESSFULLY\n\nFILE_IS_ENCRYPTED_WITH_AES-256-GCM\nSTORE_IT_SAFELY");
+    } catch (error) {
+      alert("EXPORT_FAILED: " + (error instanceof Error ? error.message : "UNKNOWN_ERROR"));
+    }
   };
 
-  const handleImport = () => {
+  const handleImport = async () => {
+    const password = prompt("ENTER_PASSWORD_TO_DECRYPT_BACKUP:");
+    if (!password) return;
+    
     try {
-      const count = importKeys(importText);
-      setImportResult(`IMPORTED_${count}_KEYS`);
+      const count = await importKeys(importText, password);
+      setImportResult(`✓ IMPORTED_${count}_KEYS`);
       setImportText("");
       refresh();
-    } catch {
-      setImportResult("INVALID_BACKUP_FILE");
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("decrypt")) {
+        setImportResult("❌ WRONG_PASSWORD_OR_CORRUPTED_FILE");
+      } else {
+        setImportResult("❌ INVALID_BACKUP_FILE");
+      }
     }
   };
 
   const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
+      const password = prompt("ENTER_PASSWORD_TO_DECRYPT_BACKUP:");
+      if (!password) return;
+      
       try {
-        const count = importKeys(reader.result as string);
-        setImportResult(`IMPORTED_${count}_KEYS`);
+        const count = await importKeys(reader.result as string, password);
+        setImportResult(`✓ IMPORTED_${count}_KEYS`);
         refresh();
-      } catch {
-        setImportResult("INVALID_BACKUP_FILE");
+      } catch (error) {
+        if (error instanceof Error && error.message.includes("decrypt")) {
+          setImportResult("❌ WRONG_PASSWORD_OR_CORRUPTED_FILE");
+        } else {
+          setImportResult("❌ INVALID_BACKUP_FILE");
+        }
       }
     };
     reader.readAsText(file);
@@ -126,10 +194,10 @@ function ClaimPage() {
             <div className="font-mono text-sm">
               <div className="text-yellow-500 font-bold mb-2">WARNING:</div>
               <div className="text-yellow-400/80">
-                {">"} STEALTH_KEYS_STORED_IN_BROWSER_LOCALSTORAGE
+                {">"} STEALTH_KEYS_ENCRYPTED_IN_BROWSER_LOCALSTORAGE
               </div>
               <div className="text-yellow-400/80">
-                {">"} DO_NOT_CLEAR_LOCALSTORAGE_BEFORE_CLAIMING
+                {">"} PASSWORD_REQUIRED_TO_ACCESS_KEYS
               </div>
               <div className="text-yellow-400/80">
                 {">"} USE_BACKUP_BUTTON_TO_EXPORT_KEYS
@@ -137,6 +205,69 @@ function ClaimPage() {
             </div>
           </div>
         </div>
+
+        {/* Unlock/Lock UI */}
+        {!isUnlocked ? (
+          <div className="terminal-box mb-8">
+            <div className="flex items-center gap-2 mb-4 pb-4 border-b-2 border-lime/30">
+              <div className="w-3 h-3 bg-red-500"></div>
+              <div className="w-3 h-3 bg-red-500/50"></div>
+              <div className="w-3 h-3 bg-red-500/20"></div>
+              <span className="ml-4 text-red-500 font-mono">
+                STORAGE_LOCKED
+              </span>
+            </div>
+            <div className="mb-4">
+              <div className="font-mono text-sm text-white/60 mb-4">
+                {">"} ENTER_PASSWORD_TO_UNLOCK_STEALTH_KEYS
+              </div>
+              <input
+                type="password"
+                value={unlockPassword}
+                onChange={(e) => setUnlockPassword(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleUnlock()}
+                placeholder="PASSWORD"
+                className="w-full bg-black border-2 border-lime/30 px-4 py-3 font-mono text-sm text-white focus:border-lime focus:outline-none mb-3"
+              />
+              <button
+                onClick={handleUnlock}
+                disabled={!unlockPassword}
+                className="btn-terminal w-full"
+              >
+                [UNLOCK]
+              </button>
+              {unlockError && (
+                <div className="mt-3 border-2 border-red-500 bg-red-500/10 p-3">
+                  <div className="font-mono text-sm text-red-400">
+                    {">"} {unlockError}
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="border-t-2 border-lime/10 pt-4">
+              <div className="text-xs font-mono text-white/40">
+                {">"} FIRST_TIME? SET_PASSWORD_ON_FIRST_WITHDRAWAL
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="border-2 border-lime/30 bg-lime/5 p-4 mb-8">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-lime text-xl">🔓</span>
+                <div className="font-mono text-sm text-lime">
+                  STORAGE_UNLOCKED
+                </div>
+              </div>
+              <button
+                onClick={handleLock}
+                className="border-2 border-lime/30 text-lime/80 px-3 py-1 font-mono text-xs hover:bg-lime/10 transition-colors"
+              >
+                [LOCK]
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="grid lg:grid-cols-2 gap-8">
           {/* Left - Destination & Balances */}
@@ -313,44 +444,70 @@ function ClaimPage() {
 
               {showBackup && (
                 <div className="space-y-4">
+                  {/* Security Notice */}
+                  <div className="border-2 border-lime/30 bg-lime/5 p-4">
+                    <div className="flex items-start gap-2 mb-2">
+                      <span className="text-lime text-lg">🔒</span>
+                      <div className="text-xs font-mono text-lime/80">
+                        SECURITY_FEATURES:
+                      </div>
+                    </div>
+                    <div className="space-y-1 text-xs font-mono text-white/60">
+                      <div>{">"} AES-256-GCM encryption</div>
+                      <div>{">"} PBKDF2 key derivation (100k iterations)</div>
+                      <div>{">"} Password-protected export/import</div>
+                      <div>{">"} Safe to store in cloud backup</div>
+                    </div>
+                  </div>
+
                   {/* Export */}
                   <div>
                     <div className="text-xs font-mono text-lime/60 mb-2">
-                      EXPORT_KEYS:
+                      EXPORT_KEYS (ENCRYPTED):
+                    </div>
+                    <div className="text-xs font-mono text-white/40 mb-3">
+                      {">"} CREATES_PASSWORD-PROTECTED_BACKUP
+                      <br />
+                      {">"} USES_AES-256-GCM_ENCRYPTION
+                      <br />
+                      {">"} FILE_EXTENSION: .enc
                     </div>
                     <button
                       onClick={handleExport}
                       className="border-2 border-lime text-lime px-4 py-2 font-mono font-bold text-sm hover:bg-lime hover:text-black transition-colors w-full"
                     >
-                      [EXPORT_TO_JSON]
+                      [EXPORT_TO_ENCRYPTED_FILE]
                     </button>
                   </div>
 
                   {/* Import from file */}
                   <div>
                     <div className="text-xs font-mono text-lime/60 mb-2">
-                      IMPORT_FROM_FILE:
+                      IMPORT_FROM_ENCRYPTED_FILE:
                     </div>
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept=".json"
+                      accept=".enc,.json"
                       onChange={handleFileImport}
                       className="block w-full text-xs font-mono text-white/60 file:mr-4 file:py-2 file:px-4 file:border-2 file:border-lime/30 file:text-xs file:bg-black file:text-lime file:font-mono file:font-bold hover:file:bg-lime hover:file:text-black file:transition-colors"
                     />
+                    <div className="text-xs font-mono text-white/30 mt-2">
+                      {">"} ACCEPTS: .enc (encrypted) or .json (legacy)
+                    </div>
                   </div>
 
                   {/* Import from text */}
                   <div>
                     <div className="text-xs font-mono text-lime/60 mb-2">
-                      OR_PASTE_JSON:
+                      OR_PASTE_ENCRYPTED_DATA:
                     </div>
                     <textarea
                       value={importText}
                       onChange={(e) => setImportText(e.target.value)}
                       rows={4}
                       className="w-full bg-black border-2 border-lime/30 px-3 py-2 font-mono text-xs text-white focus:border-lime focus:outline-none mb-2"
-                      placeholder="PASTE_EXPORTED_JSON_HERE..."
+                      placeholder="PASTE_ENCRYPTED_BACKUP_HERE..."
                     />
                     <button
                       onClick={handleImport}
