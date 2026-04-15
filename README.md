@@ -206,6 +206,35 @@ flowchart LR
 - **Frontend**: TanStack Start + React
 - **Backend**: Rust (Axum)
 
+## Security
+
+### Key Management
+TraceZero implements secure key management practices:
+- **RSA Private Key**: Stored in `crates/relayer/rsa_signing_key.der` with `600` permissions (owner read/write only)
+- **Treasury Keypair**: Stored in `~/.config/tracezero/treasury.json` outside project directory with `600` permissions
+- **Automatic Permission Setting**: Keys are automatically created with secure permissions
+- **Minimal Logging**: Key paths are logged at debug level only, not in production logs
+
+### Security Audit
+A comprehensive security audit has been conducted. All critical issues have been addressed:
+- ✅ **C-04**: RSA key duplication eliminated, permissions secured
+- ✅ **C-05**: Treasury moved to secure location, permissions secured  
+- ✅ **C-06**: Key path logging reduced to debug level
+
+### Production Recommendations
+For production deployments:
+- Use HSM or cloud KMS for RSA key storage
+- Use hardware wallet or multisig for treasury operations
+- Set `RUST_LOG=info` (not debug) to prevent key path logging
+- Implement key rotation strategy
+- Monitor access to cryptographic material
+
+### Verification
+Run the security test suite:
+```bash
+./scripts/test-security-fixes.sh
+```
+
 ## License
 
 MIT

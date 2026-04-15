@@ -282,19 +282,42 @@ echo -e "${BLUE}[STEP_09] Setting up treasury wallet...${NC}"
 
 cd "$PROJECT_ROOT"
 
-TREASURY_PATH="$PROJECT_ROOT/treasury.json"
+# Use secure location outside project directory
+TREASURY_DIR="$HOME/.config/tracezero"
+TREASURY_PATH="$TREASURY_DIR/treasury.json"
+
+# Create secure directory if it doesn't exist
+if [ ! -d "$TREASURY_DIR" ]; then
+    mkdir -p "$TREASURY_DIR"
+    chmod 700 "$TREASURY_DIR"
+    echo -e "${GREEN}✓ Created secure treasury directory: ${CYAN}$TREASURY_DIR${NC}"
+fi
 
 if [ -f "$TREASURY_PATH" ]; then
     TREASURY_PUBKEY=$(solana-keygen pubkey "$TREASURY_PATH")
     echo -e "${GREEN}✓ Treasury wallet exists: ${CYAN}$TREASURY_PUBKEY${NC}"
+    
+    # Ensure secure permissions
+    chmod 600 "$TREASURY_PATH"
 else
-    echo -e "${YELLOW}Generating treasury wallet (separate from deposit wallet for privacy)...${NC}"
-    solana-keygen new -o "$TREASURY_PATH" --no-bip39-passphrase --silent
-    TREASURY_PUBKEY=$(solana-keygen pubkey "$TREASURY_PATH")
-    echo -e "${GREEN}✓ Treasury wallet created: ${CYAN}$TREASURY_PUBKEY${NC}"
-    echo -e "${YELLOW}  PRIVACY: Credit payments go to this wallet.${NC}"
-    echo -e "${YELLOW}  Pool deposits use the main keypair (different address).${NC}"
-    echo -e "${YELLOW}  This breaks the on-chain trace chain.${NC}"
+    # Check if old treasury.json exists in project root
+    if [ -f "$PROJECT_ROOT/treasury.json" ]; then
+        echo -e "${YELLOW}Found treasury.json in project root. Moving to secure location...${NC}"
+        mv "$PROJECT_ROOT/treasury.json" "$TREASURY_PATH"
+        chmod 600 "$TREASURY_PATH"
+        TREASURY_PUBKEY=$(solana-keygen pubkey "$TREASURY_PATH")
+        echo -e "${GREEN}✓ Treasury wallet moved to: ${CYAN}$TREASURY_PATH${NC}"
+        echo -e "${GREEN}✓ Treasury pubkey: ${CYAN}$TREASURY_PUBKEY${NC}"
+    else
+        echo -e "${YELLOW}Generating treasury wallet (separate from deposit wallet for privacy)...${NC}"
+        solana-keygen new -o "$TREASURY_PATH" --no-bip39-passphrase --silent
+        chmod 600 "$TREASURY_PATH"
+        TREASURY_PUBKEY=$(solana-keygen pubkey "$TREASURY_PATH")
+        echo -e "${GREEN}✓ Treasury wallet created: ${CYAN}$TREASURY_PUBKEY${NC}"
+        echo -e "${YELLOW}  PRIVACY: Credit payments go to this wallet.${NC}"
+        echo -e "${YELLOW}  Pool deposits use the main keypair (different address).${NC}"
+        echo -e "${YELLOW}  This breaks the on-chain trace chain.${NC}"
+    fi
 fi
 
 DEPOSIT_PUBKEY=$(solana-keygen pubkey)

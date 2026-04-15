@@ -9,13 +9,16 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 use crate::error::{RelayerError, Result};
 
 type BigUint = rsa::BigUint;
 
-const DEFAULT_RSA_KEY_PATH: &str = "rsa_signing_key.der";
+const DEFAULT_RSA_KEY_PATH: &str = "crates/relayer/rsa_signing_key.der";
 
 pub struct BlindSigner {
     private_key: RsaPrivateKey,
@@ -30,11 +33,12 @@ impl BlindSigner {
         if key_path.exists() {
             match Self::load_from_file(&key_path) {
                 Ok(signer) => {
-                    info!("Loaded RSA keypair from {}", key_path.display());
+                    info!("Loaded RSA keypair successfully");
+                    debug!("RSA key loaded from: {}", key_path.display());
                     return Ok(signer);
                 }
                 Err(e) => {
-                    warn!("Failed to load RSA key from {}: {}", key_path.display(), e);
+                    warn!("Failed to load RSA key: {}", e);
                     warn!("Generating new keypair (old credits will be invalid!)");
                 }
             }
@@ -42,9 +46,10 @@ impl BlindSigner {
 
         let signer = Self::new(key_bits)?;
         if let Err(e) = signer.save_to_file(&key_path) {
-            warn!("Failed to save RSA key to {}: {}", key_path.display(), e);
+            warn!("Failed to save RSA key: {}", e);
         } else {
-            info!("Saved RSA keypair to {}", key_path.display());
+            info!("Saved RSA keypair successfully");
+            debug!("RSA key saved to: {}", key_path.display());
         }
 
         Ok(signer)
@@ -75,8 +80,24 @@ impl BlindSigner {
             .private_key
             .to_pkcs8_der()
             .map_err(|e| RelayerError::Crypto(format!("Failed to encode key: {}", e)))?;
+        
+        // Create parent directory if it doesn't exist
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| RelayerError::Crypto(format!("Failed to create key directory: {}", e)))?;
+        }
+        
         std::fs::write(path, bytes.as_bytes())
             .map_err(|e| RelayerError::Crypto(format!("Failed to write key file: {}", e)))?;
+        
+        // Set secure permissions (600 - owner read/write only) on Unix systems
+        #[cfg(unix)]
+        {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+                .map_err(|e| RelayerError::Crypto(format!("Failed to set key file permissions: {}", e)))?;
+            debug!("Set RSA key file permissions to 600 (owner read/write only)");
+        }
+        
         Ok(())
     }
 
