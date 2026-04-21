@@ -54,6 +54,20 @@ if ! command -v yarn &> /dev/null; then
 fi
 echo -e "${GREEN}✓ Yarn installed${NC}"
 
+# STEP 1.5: Stop any existing relayer processes
+echo ""
+echo -e "${BLUE}[STEP_01.5] Checking for existing relayer processes...${NC}"
+EXISTING_RELAYER=$(pgrep -f "target/release/relayer" || true)
+if [ -n "$EXISTING_RELAYER" ]; then
+    echo -e "${YELLOW}Found existing relayer process(es): $EXISTING_RELAYER${NC}"
+    echo -e "${YELLOW}Stopping existing relayer...${NC}"
+    pkill -f "target/release/relayer" || true
+    sleep 2
+    echo -e "${GREEN}✓ Stopped existing relayer${NC}"
+else
+    echo -e "${GREEN}✓ No existing relayer processes found${NC}"
+fi
+
 if [ ! -d "$PROJECT_ROOT/programs/privacy_proxy/node_modules" ]; then
     echo -e "${YELLOW}Installing dependencies for init script...${NC}"
     cd "$PROJECT_ROOT/programs/privacy_proxy"
@@ -250,30 +264,95 @@ else
     fi
 fi
 
-# STEP 8: Clear Old Relayer State
+# STEP 8: Handle Merkle State (Smart Recovery)
 echo ""
-echo -e "${BLUE}[STEP_08] Clearing old relayer state...${NC}"
+echo -e "${BLUE}[STEP_08] Checking merkle state...${NC}"
 
 cd "$PROJECT_ROOT"
 
-STATE_FOUND=false
-
-if [ -d "merkle_state" ] || [ -f "used_tokens.dat" ] || [ -f "used_tokens.checksum" ]; then
-    echo -e "${YELLOW}Removing old state files from root...${NC}"
-    rm -rf merkle_state/ used_tokens.dat used_tokens.checksum
-    STATE_FOUND=true
+# Check if merkle_state exists and has actual data
+STATE_HAS_DATA=false
+if [ -d "crates/relayer/merkle_state" ]; then
+    # Check if any bucket files exist with data
+    for bucket_file in crates/relayer/merkle_state/bucket_*.json; do
+        if [ -f "$bucket_file" ]; then
+            COMMIT_COUNT=$(cat "$bucket_file" | jq '.commitments | length' 2>/dev/null || echo "0")
+            if [ "$COMMIT_COUNT" -gt 0 ]; then
+                STATE_HAS_DATA=true
+                echo -e "${GREEN}✓ Merkle state found with $COMMIT_COUNT commitments - will preserve existing deposits${NC}"
+                break
+            fi
+        fi
+    done
 fi
 
-if [ -d "crates/relayer/merkle_state" ] || [ -f "crates/relayer/used_tokens.dat" ] || [ -f "crates/relayer/used_tokens.checksum" ]; then
-    echo -e "${YELLOW}Removing old state files from relayer directory...${NC}"
-    rm -rf crates/relayer/merkle_state/ crates/relayer/used_tokens.dat crates/relayer/used_tokens.checksum
-    STATE_FOUND=true
+if [ "$STATE_HAS_DATA" = false ]; then
+    # No valid state data - determine what to do based on environment
+    echo -e "${YELLOW}No valid merkle state found (empty or missing)${NC}"
+    
+    if [ "$ENV" == "localhost" ]; then
+        # Localhost: Safe to start fresh (development environment)
+        echo -e "${CYAN}  Localhost mode: Starting fresh with empty tree${NC}"
+        echo -e "${CYAN}  Setting ALLOW_UNSAFE_EMPTY_TREE=true for development${NC}"
+        export ALLOW_UNSAFE_EMPTY_TREE=true
+    else
+        # Devnet: Check for backups first
+        echo -e "${YELLOW}  Devnet mode: Checking for backups...${NC}"
+        
+        # Look for backups with actual data
+        BACKUP_FOUND=false
+        
+        if ls -d merkle_state_backup_* >/dev/null 2>&1; then
+            for backup_dir in $(ls -dt merkle_state_backup_* 2>/dev/null); do
+                # Check if this backup has actual data
+                for bucket_file in "$backup_dir"/bucket_*.json; do
+                    if [ -f "$bucket_file" ]; then
+                        COMMIT_COUNT=$(cat "$bucket_file" | jq '.commitments | length' 2>/dev/null || echo "0")
+                        if [ "$COMMIT_COUNT" -gt 0 ]; then
+                            echo -e "${GREEN}✓ Found backup with data: $backup_dir ($COMMIT_COUNT commitments)${NC}"
+                            echo -e "${CYAN}  Restoring from backup...${NC}"
+                            mkdir -p crates/relayer/merkle_state
+                            cp -r "$backup_dir"/* crates/relayer/merkle_state/
+                            BACKUP_FOUND=true
+                            echo -e "${GREEN}✓ Restored from backup${NC}"
+                            break 2
+                        fi
+                    fi
+                done
+            done
+        fi
+        
+        if [ "$BACKUP_FOUND" = false ]; then
+            # No backup with data found
+            echo -e "${YELLOW}  No backup with data found${NC}"
+            echo -e "${YELLOW}  This appears to be a fresh deployment or testing environment${NC}"
+            echo -e "${CYAN}  Setting ALLOW_UNSAFE_EMPTY_TREE=true for devnet${NC}"
+            echo -e "${YELLOW}  Note: If you have existing deposits, restore merkle_state/ from backup${NC}"
+            export ALLOW_UNSAFE_EMPTY_TREE=true
+        fi
+    fi
 fi
 
-if [ "$STATE_FOUND" = true ]; then
-    echo -e "${GREEN}✓ Old state cleared${NC}"
-else
-    echo -e "${GREEN}✓ No old state to clear${NC}"
+# Clean up old state files in wrong locations
+STATE_CLEANED=false
+
+if [ -d "merkle_state" ]; then
+    echo -e "${YELLOW}Moving merkle_state/ from root to crates/relayer/${NC}"
+    mkdir -p crates/relayer/merkle_state
+    cp -r merkle_state/* crates/relayer/merkle_state/ 2>/dev/null || true
+    rm -rf merkle_state/
+    STATE_CLEANED=true
+fi
+
+if [ -f "used_tokens.dat" ] || [ -f "used_tokens.checksum" ]; then
+    echo -e "${YELLOW}Moving token store files to crates/relayer/${NC}"
+    mv used_tokens.dat crates/relayer/ 2>/dev/null || true
+    mv used_tokens.checksum crates/relayer/ 2>/dev/null || true
+    STATE_CLEANED=true
+fi
+
+if [ "$STATE_CLEANED" = true ]; then
+    echo -e "${GREEN}✓ State files organized${NC}"
 fi
 
 # STEP 9: Setup Treasury Wallet (Privacy)
@@ -354,9 +433,48 @@ if [ "$NEED_RELAYER_BUILD" = true ]; then
     echo -e "${GREEN}✓ Relayer built${NC}"
 fi
 
-# STEP 11: Start Relayer
+# STEP 11: Create Backup Before Starting
 echo ""
-echo -e "${BLUE}[STEP_11] Starting relayer...${NC}"
+echo -e "${BLUE}[STEP_11] Creating backup of current state...${NC}"
+
+cd "$PROJECT_ROOT"
+
+# Only backup if there's actual data
+SHOULD_BACKUP=false
+if [ -d "crates/relayer/merkle_state" ]; then
+    for bucket_file in crates/relayer/merkle_state/bucket_*.json; do
+        if [ -f "$bucket_file" ]; then
+            COMMIT_COUNT=$(cat "$bucket_file" | jq '.commitments | length' 2>/dev/null || echo "0")
+            if [ "$COMMIT_COUNT" -gt 0 ]; then
+                SHOULD_BACKUP=true
+                break
+            fi
+        fi
+    done
+fi
+
+if [ "$SHOULD_BACKUP" = true ]; then
+    TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+    BACKUP_DIR="merkle_state_backup_$TIMESTAMP"
+    
+    echo -e "${CYAN}Creating backup: $BACKUP_DIR${NC}"
+    cp -r crates/relayer/merkle_state "$BACKUP_DIR"
+    
+    # Keep only last 10 backups
+    BACKUP_COUNT=$(ls -d merkle_state_backup_* 2>/dev/null | wc -l)
+    if [ "$BACKUP_COUNT" -gt 10 ]; then
+        echo -e "${YELLOW}Cleaning up old backups (keeping last 10)...${NC}"
+        ls -dt merkle_state_backup_* | tail -n +11 | xargs rm -rf
+    fi
+    
+    echo -e "${GREEN}✓ Backup created${NC}"
+else
+    echo -e "${YELLOW}No state data to backup (empty or fresh start)${NC}"
+fi
+
+# STEP 12: Start Relayer
+echo ""
+echo -e "${BLUE}[STEP_12] Starting relayer...${NC}"
 
 if pgrep -f "target/release/relayer" > /dev/null; then
     echo -e "${YELLOW}Killing existing relayer process...${NC}"
@@ -368,8 +486,25 @@ cd "$PROJECT_ROOT/crates/relayer"
 
 echo -e "${GREEN}Starting relayer with RPC_URL=$RPC_URL${NC}"
 echo -e "${GREEN}Treasury wallet: $TREASURY_PATH${NC}"
-echo -e "${CYAN}Logs will appear below...${NC}"
 echo -e "${CYAN}State files will be stored in: crates/relayer/${NC}"
+echo ""
+
+# Show startup mode
+if [ "$ALLOW_UNSAFE_EMPTY_TREE" = "true" ]; then
+    echo -e "${YELLOW}  STARTUP MODE: Fresh Start (Empty Tree)${NC}"
+    echo -e "${YELLOW}  ALLOW_UNSAFE_EMPTY_TREE=true${NC}"
+    if [ "$ENV" == "localhost" ]; then
+        echo -e "${GREEN}  ✓ Safe for localhost development${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Devnet mode - ensure no existing deposits${NC}"
+    fi
+else
+    echo -e "${GREEN}  STARTUP MODE: Normal (Preserving Existing State)${NC}"
+    echo -e "${GREEN}  Existing deposits will remain withdrawable${NC}"
+    echo -e "${GREEN}  Automatic backups enabled${NC}"
+fi
+echo ""
+echo -e "${CYAN}Logs will appear below...${NC}"
 echo ""
 
 export RPC_URL=$RPC_URL
