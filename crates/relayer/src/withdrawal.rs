@@ -175,8 +175,7 @@ impl WithdrawalService {
             .await?;
 
         // 4. Track this pending withdrawal for automatic execution
-        {
-            let inputs = &request.public_inputs;
+        let (pool_pda, pending_pda, _total_deposits) = {
             let (pool_pda, _) =
                 Pubkey::find_program_address(&[b"pool", &[bucket_id]], &self.config.program_id);
 
@@ -186,36 +185,31 @@ impl WithdrawalService {
                 .get_account_data(&pool_pda)
                 .await
                 .unwrap_or_default();
-            // total_deposits was incremented by the request, but we used the pre-increment value
-            // The PDA was derived with the pre-increment total_deposits, which is now total_deposits - 1
-            // Actually, request_withdrawal uses pool.total_deposits at the time of the call,
-            // and doesn't increment it. So we need the value BEFORE the tx
-            // But the tx already executed. Let's parse current total_deposits and subtract 0
-            // (request_withdrawal doesn't change total_deposits, only deposit does)
-            // Actually looking at request_withdrawal.rs, it uses pool.total_deposits as-is
-            // So we need the current value. But we already computed it in submit_withdrawal_request
-            // Let's just re-derive it
+            
+            // Parse total_deposits from pool account
+            // request_withdrawal doesn't increment total_deposits, only deposit does
+            // So the current value is the same value used for the PDA seed
             let total_deposits = if pool_data.len() >= 65 {
                 u64::from_le_bytes(pool_data[57..65].try_into().unwrap_or([0u8; 8]))
             } else {
                 0u64
             };
-            // The pending PDA was created with total_deposits value at time of request.
-            // Since request_withdrawal doesn't increment total_deposits, the current value
-            // minus 0 is correct. But we need the value BEFORE the tx executed
-            // Actually, the tx already ran, and request_withdrawal doesn't change total_deposits.
-            // So current total_deposits is the same value used for the PDA seed
-            // WAIT - but the PDA was created with the value at tx time. If no other deposits
-            // happened between our fetch and the tx, it's the same. For safety, let's
-            // compute it from the tx_id we know: it's total_deposits at time of request
-            // Since we fetched it right before submitting, and the tx just confirmed,
-            // the value we used is total_deposits (current) - but request_withdrawal
-            // doesn't modify it. So current value = value used for PDA
+            
             let (pending_pda, _) = Pubkey::find_program_address(
                 &[b"pending", pool_pda.as_ref(), &total_deposits.to_le_bytes()],
                 &self.config.program_id,
             );
 
+            info!(
+                "Tracking withdrawal: pool={}, total_deposits={}, pending_pda={}",
+                pool_pda, total_deposits, pending_pda
+            );
+
+            (pool_pda, pending_pda, total_deposits)
+        };
+
+        {
+            let inputs = &request.public_inputs;
             let recipient = Pubkey::new_from_array(inputs.recipient);
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -242,8 +236,8 @@ impl WithdrawalService {
             let mut pending = self.pending_withdrawals.write().await;
             pending.push(record);
             info!(
-                "Tracked pending withdrawal: execute_after={}, recipient={}",
-                execute_after, recipient
+                "Tracked pending withdrawal: pda={}, pool={}, execute_after={}, recipient={}",
+                pending_pda, pool_pda, execute_after, recipient
             );
         }
 
@@ -418,6 +412,41 @@ impl WithdrawalService {
         if nullifier_exists {
             info!("Nullifier account already exists, withdrawal may have already executed");
             return Ok("Already executed".to_string());
+        }
+
+        // Verify the pending withdrawal PDA exists and read its data to confirm pool address
+        match self.rpc_client.get_account(&record.pda).await {
+            Ok(account) => {
+                // Parse the pool address from the pending withdrawal account
+                // PendingWithdrawal layout:
+                // - discriminator: 8 bytes
+                // - tx_id: 8 bytes
+                // - pool: 32 bytes (offset 16)
+                if account.data.len() >= 48 {
+                    let pool_bytes = &account.data[16..48];
+                    let stored_pool = Pubkey::new_from_array(pool_bytes.try_into().unwrap());
+                    if stored_pool != record.pool_pda {
+                        error!(
+                            "Pool mismatch! Record has {}, on-chain has {}",
+                            record.pool_pda, stored_pool
+                        );
+                        return Err(RelayerError::TransactionFailed(format!(
+                            "Pool address mismatch: expected {}, found {}",
+                            record.pool_pda, stored_pool
+                        )));
+                    }
+                    info!("✓ Verified pending withdrawal PDA exists with correct pool");
+                } else {
+                    warn!("Pending withdrawal account data too small, proceeding anyway");
+                }
+            }
+            Err(e) => {
+                error!("Pending withdrawal PDA {} not found: {}", record.pda, e);
+                return Err(RelayerError::TransactionFailed(format!(
+                    "Pending withdrawal account not found: {}",
+                    e
+                )));
+            }
         }
 
         // Ensure recipient and treasury accounts exist before execute_withdrawal.

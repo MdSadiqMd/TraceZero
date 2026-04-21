@@ -120,10 +120,13 @@ mod tests {
 
     #[test]
     fn test_bucket_id() {
-        assert_eq!(get_bucket_id(100_000_000), Some(0));
-        assert_eq!(get_bucket_id(1_000_000_000), Some(1));
-        assert_eq!(get_bucket_id(10_000_000_000), Some(2));
-        assert_eq!(get_bucket_id(100_000_000_000), Some(3));
+        assert_eq!(get_bucket_id(100_000_000), Some(0));      // 0.1 SOL
+        assert_eq!(get_bucket_id(500_000_000), Some(1));      // 0.5 SOL
+        assert_eq!(get_bucket_id(1_000_000_000), Some(2));    // 1 SOL
+        assert_eq!(get_bucket_id(5_000_000_000), Some(3));    // 5 SOL
+        assert_eq!(get_bucket_id(10_000_000_000), Some(4));   // 10 SOL
+        assert_eq!(get_bucket_id(50_000_000_000), Some(5));   // 50 SOL
+        assert_eq!(get_bucket_id(100_000_000_000), Some(6));  // 100 SOL
         assert_eq!(get_bucket_id(999), None);
     }
 

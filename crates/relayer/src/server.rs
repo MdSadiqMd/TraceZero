@@ -164,6 +164,24 @@ pub async fn run(state: Arc<RelayerState>) -> anyhow::Result<()> {
 struct HealthResponse {
     status: &'static str,
     version: &'static str,
+    merkle_sync: MerkleSyncHealth,
+}
+
+#[derive(Serialize)]
+struct MerkleSyncHealth {
+    all_synced: bool,
+    buckets: Vec<BucketSyncStatus>,
+    warnings: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct BucketSyncStatus {
+    bucket_id: u8,
+    is_synced: bool,
+    local_size: usize,
+    on_chain_size: Option<u64>,
+    last_sync_success: Option<i64>,
+    error_message: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -245,10 +263,48 @@ struct ProofResponse {
     error: Option<String>,
 }
 
-async fn health() -> Json<HealthResponse> {
+async fn health(State(state): State<Arc<RelayerState>>) -> Json<HealthResponse> {
+    let sync_status = state.merkle_service.get_sync_status().await;
+    
+    let mut all_synced = true;
+    let mut warnings = Vec::new();
+    let mut buckets = Vec::new();
+    
+    for bucket_id in 0..BUCKET_AMOUNTS.len() as u8 {
+        if let Some(status) = sync_status.get(&bucket_id) {
+            if !status.is_synced {
+                all_synced = false;
+                warnings.push(format!("Bucket {} not synced", bucket_id));
+            }
+            
+            if let Some(error) = &status.error_message {
+                warnings.push(format!("Bucket {}: {}", bucket_id, error));
+            }
+            
+            buckets.push(BucketSyncStatus {
+                bucket_id: status.bucket_id,
+                is_synced: status.is_synced,
+                local_size: status.local_size,
+                on_chain_size: status.on_chain_size,
+                last_sync_success: status.last_sync_success,
+                error_message: status.error_message.clone(),
+            });
+        } else {
+            all_synced = false;
+            warnings.push(format!("Bucket {} status unknown", bucket_id));
+        }
+    }
+    
+    let status = if all_synced { "ok" } else { "degraded" };
+    
     Json(HealthResponse {
-        status: "ok",
+        status,
         version: env!("CARGO_PKG_VERSION"),
+        merkle_sync: MerkleSyncHealth {
+            all_synced,
+            buckets,
+            warnings,
+        },
     })
 }
 

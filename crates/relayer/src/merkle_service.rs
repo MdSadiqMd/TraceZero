@@ -5,14 +5,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::error::{RelayerError, Result};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct TreeState {
     commitments: Vec<[u8; 32]>,
     checksum: [u8; 32],
+    version: u32,
+    last_updated: i64,
 }
 
 impl TreeState {
@@ -32,9 +34,16 @@ impl TreeState {
 
     fn new(commitments: Vec<[u8; 32]>) -> Self {
         let checksum = Self::compute_checksum(&commitments);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        
         Self {
             commitments,
             checksum,
+            version: 1,
+            last_updated: now,
         }
     }
 
@@ -43,11 +52,34 @@ impl TreeState {
     }
 }
 
-/// Merkle tree service managing trees for all pools
+/// Write-Ahead Log entry for crash recovery
+#[derive(Serialize, Deserialize)]
+struct WALEntry {
+    bucket_id: u8,
+    commitment: [u8; 32],
+    timestamp: i64,
+    operation: String,
+}
+
+/// Merkle tree service managing trees for all pools with enhanced persistence
 pub struct MerkleService {
     trees: Arc<RwLock<HashMap<u8, MerkleTree>>>,
     commitments: Arc<RwLock<HashMap<u8, Vec<[u8; 32]>>>>,
     persistence_path: PathBuf,
+    wal_path: PathBuf,
+    /// Track sync status for health checks
+    sync_status: Arc<RwLock<HashMap<u8, SyncStatus>>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct SyncStatus {
+    pub bucket_id: u8,
+    pub is_synced: bool,
+    pub local_size: usize,
+    pub on_chain_size: Option<u64>,
+    pub last_sync_attempt: Option<i64>,
+    pub last_sync_success: Option<i64>,
+    pub error_message: Option<String>,
 }
 
 impl MerkleService {
@@ -55,20 +87,145 @@ impl MerkleService {
         let persistence_path = std::env::var("MERKLE_STATE_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|_| PathBuf::from("merkle_state"));
+        
+        let wal_path = persistence_path.join("wal");
+        
         if let Err(e) = std::fs::create_dir_all(&persistence_path) {
             warn!("Failed to create merkle state directory: {}", e);
+        }
+        if let Err(e) = std::fs::create_dir_all(&wal_path) {
+            warn!("Failed to create WAL directory: {}", e);
         }
 
         Self {
             trees: Arc::new(RwLock::new(HashMap::new())),
             commitments: Arc::new(RwLock::new(HashMap::new())),
             persistence_path,
+            wal_path,
+            sync_status: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     fn state_file_path(&self, bucket_id: u8) -> PathBuf {
         self.persistence_path
             .join(format!("bucket_{}.json", bucket_id))
+    }
+
+    fn snapshot_path(&self, bucket_id: u8, timestamp: i64) -> PathBuf {
+        self.persistence_path
+            .join("snapshots")
+            .join(format!("bucket_{}_{}.json", bucket_id, timestamp))
+    }
+
+    fn wal_file_path(&self, bucket_id: u8) -> PathBuf {
+        self.wal_path.join(format!("bucket_{}.wal", bucket_id))
+    }
+
+    /// Write to WAL before modifying state (for crash recovery)
+    async fn write_wal(&self, bucket_id: u8, commitment: [u8; 32]) -> Result<()> {
+        let entry = WALEntry {
+            bucket_id,
+            commitment,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64,
+            operation: "insert".to_string(),
+        };
+
+        let wal_path = self.wal_file_path(bucket_id);
+        let json = serde_json::to_string(&entry)
+            .map_err(|e| RelayerError::Internal(format!("WAL serialize failed: {}", e)))?;
+        
+        // Append to WAL file
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&wal_path)
+            .map_err(|e| RelayerError::Internal(format!("WAL open failed: {}", e)))?;
+        
+        writeln!(file, "{}", json)
+            .map_err(|e| RelayerError::Internal(format!("WAL write failed: {}", e)))?;
+        
+        file.sync_all()
+            .map_err(|e| RelayerError::Internal(format!("WAL sync failed: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Clear WAL after successful state save
+    async fn clear_wal(&self, bucket_id: u8) -> Result<()> {
+        let wal_path = self.wal_file_path(bucket_id);
+        if wal_path.exists() {
+            std::fs::remove_file(&wal_path)
+                .map_err(|e| RelayerError::Internal(format!("WAL clear failed: {}", e)))?;
+        }
+        Ok(())
+    }
+
+    /// Create a snapshot of the current state
+    pub async fn create_snapshot(&self, bucket_id: u8) -> Result<()> {
+        let commitments = self.commitments.read().await;
+        let bucket_commitments = commitments.get(&bucket_id).cloned().unwrap_or_default();
+        drop(commitments);
+
+        let state = TreeState::new(bucket_commitments);
+        let json = serde_json::to_string_pretty(&state)
+            .map_err(|e| RelayerError::Internal(format!("Snapshot serialize failed: {}", e)))?;
+
+        let snapshot_dir = self.persistence_path.join("snapshots");
+        std::fs::create_dir_all(&snapshot_dir)
+            .map_err(|e| RelayerError::Internal(format!("Snapshot dir create failed: {}", e)))?;
+
+        let snapshot_path = self.snapshot_path(bucket_id, state.last_updated);
+        std::fs::write(&snapshot_path, &json)
+            .map_err(|e| RelayerError::Internal(format!("Snapshot write failed: {}", e)))?;
+
+        info!("Created snapshot for bucket {} at {:?}", bucket_id, snapshot_path);
+        
+        // Keep only last 10 snapshots
+        self.cleanup_old_snapshots(bucket_id, 10).await?;
+
+        Ok(())
+    }
+
+    /// Cleanup old snapshots, keeping only the most recent N
+    async fn cleanup_old_snapshots(&self, bucket_id: u8, keep_count: usize) -> Result<()> {
+        let snapshot_dir = self.persistence_path.join("snapshots");
+        if !snapshot_dir.exists() {
+            return Ok(());
+        }
+
+        let pattern = format!("bucket_{}_", bucket_id);
+        let mut snapshots: Vec<_> = std::fs::read_dir(&snapshot_dir)
+            .map_err(|e| RelayerError::Internal(format!("Read snapshot dir failed: {}", e)))?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry.file_name().to_string_lossy().starts_with(&pattern)
+            })
+            .collect();
+
+        if snapshots.len() <= keep_count {
+            return Ok(());
+        }
+
+        // Sort by modification time (oldest first)
+        snapshots.sort_by_key(|entry| {
+            entry.metadata().ok().and_then(|m| m.modified().ok())
+        });
+
+        // Remove oldest snapshots
+        let to_remove = snapshots.len() - keep_count;
+        for entry in snapshots.iter().take(to_remove) {
+            if let Err(e) = std::fs::remove_file(entry.path()) {
+                warn!("Failed to remove old snapshot: {}", e);
+            } else {
+                debug!("Removed old snapshot: {:?}", entry.path());
+            }
+        }
+
+        Ok(())
     }
 
     async fn load_state(&self, bucket_id: u8) -> Option<Vec<[u8; 32]>> {
@@ -81,9 +238,10 @@ impl MerkleService {
             Ok(data) => match serde_json::from_str::<TreeState>(&data) {
                 Ok(state) if state.verify() => {
                     info!(
-                        "Loaded {} commitments for bucket {} (verified)",
+                        "Loaded {} commitments for bucket {} (verified, last updated: {})",
                         state.commitments.len(),
-                        bucket_id
+                        bucket_id,
+                        state.last_updated
                     );
                     Some(state.commitments)
                 }
@@ -92,18 +250,71 @@ impl MerkleService {
                         "Checksum mismatch for bucket {} - data corrupted",
                         bucket_id
                     );
-                    None
+                    // Try to load from latest snapshot
+                    warn!("Attempting to recover from snapshot...");
+                    self.load_latest_snapshot(bucket_id).await
                 }
                 Err(e) => {
                     error!("Failed to parse state for bucket {}: {}", bucket_id, e);
-                    None
+                    // Try to load from latest snapshot
+                    warn!("Attempting to recover from snapshot...");
+                    self.load_latest_snapshot(bucket_id).await
                 }
             },
             Err(e) => {
                 error!("Failed to read state for bucket {}: {}", bucket_id, e);
-                None
+                // Try to load from latest snapshot
+                warn!("Attempting to recover from snapshot...");
+                self.load_latest_snapshot(bucket_id).await
             }
         }
+    }
+
+    /// Load the latest snapshot for a bucket
+    async fn load_latest_snapshot(&self, bucket_id: u8) -> Option<Vec<[u8; 32]>> {
+        let snapshot_dir = self.persistence_path.join("snapshots");
+        if !snapshot_dir.exists() {
+            return None;
+        }
+
+        let pattern = format!("bucket_{}_", bucket_id);
+        let mut snapshots: Vec<_> = std::fs::read_dir(&snapshot_dir)
+            .ok()?
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry.file_name().to_string_lossy().starts_with(&pattern)
+            })
+            .collect();
+
+        if snapshots.is_empty() {
+            return None;
+        }
+
+        // Sort by modification time (newest first)
+        snapshots.sort_by_key(|entry| {
+            std::cmp::Reverse(entry.metadata().ok().and_then(|m| m.modified().ok()))
+        });
+
+        // Try to load the newest snapshot
+        for entry in snapshots {
+            match std::fs::read_to_string(entry.path()) {
+                Ok(data) => match serde_json::from_str::<TreeState>(&data) {
+                    Ok(state) if state.verify() => {
+                        info!(
+                            "Recovered {} commitments for bucket {} from snapshot (timestamp: {})",
+                            state.commitments.len(),
+                            bucket_id,
+                            state.last_updated
+                        );
+                        return Some(state.commitments);
+                    }
+                    _ => continue,
+                },
+                Err(_) => continue,
+            }
+        }
+
+        None
     }
 
     async fn save_state(&self, bucket_id: u8) -> Result<()> {
@@ -123,7 +334,21 @@ impl MerkleService {
         std::fs::rename(&temp_path, &path)
             .map_err(|e| RelayerError::Internal(format!("Rename failed: {}", e)))?;
 
+        // Clear WAL after successful save
+        self.clear_wal(bucket_id).await?;
+
         Ok(())
+    }
+
+    /// Update sync status for health checks
+    async fn update_sync_status(&self, bucket_id: u8, status: SyncStatus) {
+        let mut sync_status = self.sync_status.write().await;
+        sync_status.insert(bucket_id, status);
+    }
+
+    /// Get sync status for all buckets (for health endpoint)
+    pub async fn get_sync_status(&self) -> HashMap<u8, SyncStatus> {
+        self.sync_status.read().await.clone()
     }
 
     pub async fn init_tree(&self, bucket_id: u8) -> Result<()> {
@@ -145,19 +370,58 @@ impl MerkleService {
             let mut trees = self.trees.write().await;
             let mut commitments = self.commitments.write().await;
             trees.insert(bucket_id, tree);
-            commitments.insert(bucket_id, saved);
+            commitments.insert(bucket_id, saved.clone());
+            
+            // Update sync status
+            self.update_sync_status(bucket_id, SyncStatus {
+                bucket_id,
+                is_synced: true,
+                local_size: saved.len(),
+                on_chain_size: None,
+                last_sync_attempt: Some(std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64),
+                last_sync_success: Some(std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64),
+                error_message: None,
+            }).await;
+            
             info!("Restored Merkle tree for bucket {} from disk", bucket_id);
         } else {
             let mut trees = self.trees.write().await;
             let mut commitments = self.commitments.write().await;
             trees.insert(bucket_id, tree);
             commitments.insert(bucket_id, Vec::new());
+            
+            // Update sync status
+            self.update_sync_status(bucket_id, SyncStatus {
+                bucket_id,
+                is_synced: true,
+                local_size: 0,
+                on_chain_size: None,
+                last_sync_attempt: Some(std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64),
+                last_sync_success: Some(std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs() as i64),
+                error_message: None,
+            }).await;
+            
             info!("Initialized new Merkle tree for bucket {}", bucket_id);
         }
         Ok(())
     }
 
     pub async fn insert(&self, bucket_id: u8, commitment: [u8; 32]) -> Result<u64> {
+        // Write to WAL first (for crash recovery)
+        self.write_wal(bucket_id, commitment).await?;
+        
         let mut trees = self.trees.write().await;
         let mut commitments = self.commitments.write().await;
 
@@ -170,12 +434,38 @@ impl MerkleService {
             .map_err(|e| RelayerError::MerkleTree(e.to_string()))?;
         commitments.entry(bucket_id).or_default().push(commitment);
 
+        let new_size = commitments.get(&bucket_id).map(|c| c.len()).unwrap_or(0);
+
         drop(trees);
         drop(commitments);
 
         if let Err(e) = self.save_state(bucket_id).await {
             error!("Failed to persist state for bucket {}: {}", bucket_id, e);
         }
+
+        // Create periodic snapshots (every 100 insertions)
+        if index % 100 == 0 && index > 0 {
+            if let Err(e) = self.create_snapshot(bucket_id).await {
+                warn!("Failed to create snapshot for bucket {}: {}", bucket_id, e);
+            }
+        }
+
+        // Update sync status
+        self.update_sync_status(bucket_id, SyncStatus {
+            bucket_id,
+            is_synced: true,
+            local_size: new_size,
+            on_chain_size: Some(new_size as u64),
+            last_sync_attempt: Some(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64),
+            last_sync_success: Some(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64),
+            error_message: None,
+        }).await;
 
         info!(
             "Inserted commitment at index {} in bucket {}",
@@ -235,12 +525,28 @@ impl MerkleService {
         on_chain_commitments: Vec<[u8; 32]>,
     ) -> Result<()> {
         let current_size = self.size(bucket_id).await.unwrap_or(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
 
         if on_chain_commitments.len() == current_size {
             info!(
                 "Bucket {} already in sync ({} commitments)",
                 bucket_id, current_size
             );
+            
+            // Update sync status
+            self.update_sync_status(bucket_id, SyncStatus {
+                bucket_id,
+                is_synced: true,
+                local_size: current_size,
+                on_chain_size: Some(on_chain_commitments.len() as u64),
+                last_sync_attempt: Some(now),
+                last_sync_success: Some(now),
+                error_message: None,
+            }).await;
+            
             return Ok(());
         }
 
@@ -259,6 +565,23 @@ impl MerkleService {
         drop(commitments);
 
         self.save_state(bucket_id).await?;
+        
+        // Create snapshot after sync
+        if let Err(e) = self.create_snapshot(bucket_id).await {
+            warn!("Failed to create snapshot after sync: {}", e);
+        }
+        
+        // Update sync status
+        self.update_sync_status(bucket_id, SyncStatus {
+            bucket_id,
+            is_synced: true,
+            local_size: on_chain_commitments.len(),
+            on_chain_size: Some(on_chain_commitments.len() as u64),
+            last_sync_attempt: Some(now),
+            last_sync_success: Some(now),
+            error_message: None,
+        }).await;
+        
         info!(
             "Synced bucket {} from chain: {} commitments",
             bucket_id,

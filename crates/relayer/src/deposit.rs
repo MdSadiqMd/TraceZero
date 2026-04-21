@@ -331,18 +331,40 @@ impl DepositService {
                 bucket_id
             );
 
-            // OPTIMIZATION: If there are too many transactions (>50), skip the slow scan
+            // CRITICAL SAFETY: If there are too many transactions (>50), we CANNOT safely sync
             // This prevents 20+ second delays on devnet where logs are often pruned anyway
+            // HOWEVER: We MUST NOT silently continue with an empty tree as this causes PERMANENT FUND LOSS
             if signatures.len() > 50 {
-                warn!(
-                    "Too many transactions ({}) to scan efficiently. Skipping history scan.",
-                    signatures.len()
+                error!(
+                    "❌ CRITICAL: Too many transactions ({}) to scan efficiently for bucket {}",
+                    signatures.len(), bucket_id
                 );
-                warn!("⚠ CONTINUING WITH EMPTY TREE - Old deposits (if any) will NOT be withdrawable!");
-                warn!("⚠ The relayer will track new deposits from this point forward.");
-                warn!("⚠ If you need to recover old deposits, you must restore the merkle_state/ from backup.");
+                error!("❌ Cannot safely sync merkle tree from transaction history");
+                error!("❌ Continuing with empty tree would cause PERMANENT FUND LOSS for existing deposits");
+                error!("❌ RELAYER MUST BE STOPPED - Manual intervention required");
+                error!("");
+                error!("Recovery options:");
+                error!("  1. Restore merkle_state/ directory from backup");
+                error!("  2. Use a full archive node with complete transaction history");
+                error!("  3. Manually reconstruct tree from known commitments");
+                error!("");
+                error!("Set ALLOW_UNSAFE_EMPTY_TREE=true to override (NOT RECOMMENDED)");
+                
+                // Check if unsafe override is enabled
+                if std::env::var("ALLOW_UNSAFE_EMPTY_TREE").unwrap_or_default() != "true" {
+                    return Err(RelayerError::MerkleTree(format!(
+                        "Cannot sync merkle tree for bucket {} - too many transactions ({}) and no backup available. \
+                        This would cause permanent fund loss. Relayer halted for safety. \
+                        Restore merkle_state/ from backup or set ALLOW_UNSAFE_EMPTY_TREE=true to override (NOT RECOMMENDED).",
+                        bucket_id, signatures.len()
+                    )));
+                }
+                
+                warn!("⚠ UNSAFE OVERRIDE ENABLED - Continuing with empty tree");
+                warn!("⚠ Old deposits (if any) will NOT be withdrawable!");
+                warn!("⚠ This should ONLY be used for fresh deployments with no existing deposits");
 
-                // Reset the tree to empty and continue
+                // Reset the tree to empty and continue (only if override is set)
                 self.merkle_service
                     .sync_from_chain(bucket_id, vec![])
                     .await?;
@@ -411,23 +433,36 @@ impl DepositService {
             }
 
             if commitments.is_empty() {
-                warn!(
-                    "Could not find any commitments in transaction history for bucket {}",
+                error!(
+                    "❌ CRITICAL: Could not find any commitments in transaction history for bucket {}",
                     bucket_id
                 );
-                warn!("This may happen if transactions are too old or logs are not available.");
+                error!("❌ This may happen if transactions are too old or logs are not available");
+                error!("❌ Continuing with empty tree would cause PERMANENT FUND LOSS for existing deposits");
+                error!("❌ RELAYER MUST BE STOPPED - Manual intervention required");
+                error!("");
+                error!("Recovery options:");
+                error!("  1. Restore merkle_state/ directory from backup");
+                error!("  2. Use a full archive node with complete transaction history");
+                error!("  3. Manually reconstruct tree from known commitments");
+                error!("");
+                error!("Set ALLOW_UNSAFE_EMPTY_TREE=true to override (NOT RECOMMENDED)");
 
-                // IMPORTANT: Instead of returning an error, we'll continue with a warning
-                // This allows the relayer to start accepting new deposits even if old ones can't be recovered
-                warn!(
-                    "⚠ CONTINUING WITH EMPTY TREE - Old deposits (if any) will NOT be withdrawable!"
-                );
-                warn!("⚠ The relayer will track new deposits from this point forward.");
-                warn!(
-                    "⚠ If you need to recover old deposits, you must restore the merkle_state/ from backup."
-                );
+                // Check if unsafe override is enabled
+                if std::env::var("ALLOW_UNSAFE_EMPTY_TREE").unwrap_or_default() != "true" {
+                    return Err(RelayerError::MerkleTree(format!(
+                        "Cannot sync merkle tree for bucket {} - no commitments found in transaction history. \
+                        This would cause permanent fund loss. Relayer halted for safety. \
+                        Restore merkle_state/ from backup or set ALLOW_UNSAFE_EMPTY_TREE=true to override (NOT RECOMMENDED).",
+                        bucket_id
+                    )));
+                }
 
-                // Reset the tree to empty and continue
+                warn!("⚠ UNSAFE OVERRIDE ENABLED - Continuing with empty tree");
+                warn!("⚠ Old deposits (if any) will NOT be withdrawable!");
+                warn!("⚠ This should ONLY be used for fresh deployments with no existing deposits");
+
+                // Reset the tree to empty and continue (only if override is set)
                 self.merkle_service
                     .sync_from_chain(bucket_id, vec![])
                     .await?;
