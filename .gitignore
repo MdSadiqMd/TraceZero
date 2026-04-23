@@ -125,3 +125,5 @@ coverage/
 # Profiling
 *.prof
 *.profdata
+
+merkle_state_backup_*/

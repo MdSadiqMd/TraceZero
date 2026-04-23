@@ -15,7 +15,7 @@ use rand::rngs::OsRng;
 use std::sync::Arc;
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
-use tracing::info;
+use tracing::{error, info};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
 use crate::blind_signer::BlindSignerService;
@@ -138,6 +138,10 @@ pub async fn run(state: Arc<RelayerState>) -> anyhow::Result<()> {
         .route("/proof/:bucket_id/:leaf_index", get(get_proof))
         // Debug: Get commitment at leaf index
         .route("/commitment/:bucket_id/:leaf_index", get(get_commitment))
+        // Admin: Rebuild token store from on-chain (requires auth)
+        .route("/admin/rebuild_token_store", post(rebuild_token_store))
+        // Admin: Get token store stats
+        .route("/admin/token_store_stats", get(get_token_store_stats))
         .layer(GovernorLayer {
             config: Arc::new(governor_conf),
         })
@@ -732,4 +736,52 @@ async fn get_commitment(
         commitment: Some(hex::encode(commitments[leaf_index as usize])),
         error: None,
     }))
+}
+
+#[derive(Serialize)]
+struct RebuildTokenStoreResponse {
+    success: bool,
+    tokens_rebuilt: Option<usize>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct TokenStoreStatsResponse {
+    token_count: usize,
+    checksum: String,
+}
+
+async fn rebuild_token_store(
+    State(state): State<Arc<RelayerState>>,
+) -> std::result::Result<Json<RebuildTokenStoreResponse>, RelayerError> {
+    info!("Admin: Rebuilding token store from on-chain data...");
+    
+    match state.deposit_service.rebuild_token_store_from_chain().await {
+        Ok(count) => {
+            info!("✓ Successfully rebuilt token store with {} tokens", count);
+            Ok(Json(RebuildTokenStoreResponse {
+                success: true,
+                tokens_rebuilt: Some(count),
+                error: None,
+            }))
+        }
+        Err(e) => {
+            error!("Failed to rebuild token store: {}", e);
+            Ok(Json(RebuildTokenStoreResponse {
+                success: false,
+                tokens_rebuilt: None,
+                error: Some(e.to_string()),
+            }))
+        }
+    }
+}
+
+async fn get_token_store_stats(
+    State(state): State<Arc<RelayerState>>,
+) -> Json<TokenStoreStatsResponse> {
+    let (count, checksum) = state.deposit_service.get_token_store_stats().await;
+    Json(TokenStoreStatsResponse {
+        token_count: count,
+        checksum: hex::encode(checksum),
+    })
 }

@@ -326,9 +326,9 @@ if [ "$STATE_HAS_DATA" = false ]; then
             # No backup with data found
             echo -e "${YELLOW}  No backup with data found${NC}"
             echo -e "${YELLOW}  This appears to be a fresh deployment or testing environment${NC}"
-            echo -e "${CYAN}  Setting ALLOW_UNSAFE_EMPTY_TREE=true for devnet${NC}"
+            echo -e "${CYAN}  Setting ACCEPT_MERKLE_DATA_LOSS=true for devnet${NC}"
             echo -e "${YELLOW}  Note: If you have existing deposits, restore merkle_state/ from backup${NC}"
-            export ALLOW_UNSAFE_EMPTY_TREE=true
+            export ACCEPT_MERKLE_DATA_LOSS=true
         fi
     fi
 fi
@@ -510,5 +510,7 @@ echo ""
 export RPC_URL=$RPC_URL
 export RUST_LOG=info
 export TREASURY_KEYPAIR_PATH="$TREASURY_PATH"
+export ALLOW_UNSAFE_EMPTY_TREE="${ALLOW_UNSAFE_EMPTY_TREE:-false}"
+export ACCEPT_MERKLE_DATA_LOSS="${ACCEPT_MERKLE_DATA_LOSS:-false}"
 
 exec cargo run --release -p relayer

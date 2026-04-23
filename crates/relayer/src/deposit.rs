@@ -50,6 +50,7 @@ impl TokenStore {
     }
 
     /// Load or create token store with integrity verification
+    /// CRITICAL: Never returns empty on corruption - halts instead to prevent double-spend
     fn load(path: PathBuf) -> Self {
         let checksum_path = path.with_extension("checksum");
         let cache = if path.exists() {
@@ -71,14 +72,31 @@ impl TokenStore {
                                 let mut stored = [0u8; 32];
                                 stored.copy_from_slice(&stored_checksum);
                                 if computed != stored {
-                                    warn!("Token store checksum mismatch! File may be corrupted.");
-                                    warn!("Starting with empty store for safety.");
-                                    // Return empty set to prevent accepting corrupted data
-                                    return Self {
-                                        cache: HashSet::new(),
-                                        path,
-                                        checksum: [0u8; 32],
-                                    };
+                                    error!("❌ CRITICAL: Token store checksum mismatch!");
+                                    error!("❌ File may be corrupted (disk error, power loss, etc.)");
+                                    error!("❌ Cannot safely determine which tokens have been used");
+                                    error!("❌ Continuing would allow DOUBLE-SPENDING of credits");
+                                    error!("❌ RELAYER MUST BE STOPPED - Manual intervention required");
+                                    error!("");
+                                    error!("Recovery options:");
+                                    error!("  1. Restore used_tokens.dat from backup");
+                                    error!("  2. Rebuild from on-chain UsedToken accounts (see docs)");
+                                    error!("  3. If this is a fresh deployment with no deposits, delete used_tokens.dat");
+                                    error!("");
+                                    error!("Set ALLOW_CORRUPTED_TOKEN_STORE=true to override (DANGEROUS)");
+                                    
+                                    // Check if unsafe override is enabled
+                                    if std::env::var("ALLOW_CORRUPTED_TOKEN_STORE").unwrap_or_default() != "true" {
+                                        panic!(
+                                            "Token store corrupted (checksum mismatch). \
+                                            Halting to prevent double-spend. \
+                                            Restore from backup or set ALLOW_CORRUPTED_TOKEN_STORE=true (DANGEROUS)."
+                                        );
+                                    }
+                                    
+                                    error!("⚠ DANGEROUS OVERRIDE ENABLED - Ignoring corruption");
+                                    error!("⚠ Previously redeemed tokens MAY be accepted again!");
+                                    error!("⚠ This should ONLY be used for testing or fresh deployments");
                                 }
                             }
                             _ => {
@@ -154,6 +172,18 @@ impl TokenStore {
             })?;
         }
         Ok(())
+    }
+
+    /// Get all token hashes (for backup/export)
+    #[allow(dead_code)]
+    fn get_all(&self) -> Vec<[u8; 32]> {
+        self.cache.iter().copied().collect()
+    }
+
+    /// Get count of used tokens
+    #[allow(dead_code)]
+    fn len(&self) -> usize {
+        self.cache.len()
     }
 }
 
@@ -284,6 +314,14 @@ impl DepositService {
 
     async fn sync_local_tree(&self, bucket_id: u8, on_chain_size: u64) -> Result<()> {
         let local_size = self.merkle_service.size(bucket_id).await.unwrap_or(0) as u64;
+        
+        // Case 1: Both are 0 - fresh pool, nothing to sync
+        if local_size == 0 && on_chain_size == 0 {
+            info!("Fresh pool (bucket {}), no sync needed", bucket_id);
+            return Ok(());
+        }
+        
+        // Case 2: Local has more than on-chain - should never happen
         if local_size > on_chain_size {
             error!(
                 "Local tree has more entries ({}) than on-chain ({}). This should never happen! Resetting local tree.",
@@ -300,94 +338,65 @@ impl DepositService {
                     "Fetching {} commitments from on-chain to rebuild tree...",
                     on_chain_size
                 );
+            } else {
+                // Both are now 0, nothing more to do
+                return Ok(());
             }
         }
 
-        // Fetch missing commitments from transaction history
+        // Case 3: Local is behind on-chain - need to sync
         let current_local_size = self.merkle_service.size(bucket_id).await.unwrap_or(0) as u64;
-        if current_local_size < on_chain_size {
-            warn!(
-                "On-chain has {} entries, local has {}. Fetching missing commitments from transaction history...",
-                on_chain_size, current_local_size
-            );
+        if current_local_size >= on_chain_size {
+            // Already in sync or ahead (shouldn't be ahead, but we'll handle it above)
+            return Ok(());
+        }
+        
+        warn!(
+            "On-chain has {} entries, local has {}. Fetching missing commitments from transaction history...",
+            on_chain_size, current_local_size
+        );
 
-            let pool_pda = self.get_pool_pda(bucket_id);
+        let pool_pda = self.get_pool_pda(bucket_id);
 
-            // Fetch transaction signatures for the pool account
-            let signatures = self
-                .rpc_client
-                .get_signatures_for_address(&pool_pda)
-                .await
-                .map_err(|e| {
-                    RelayerError::TransactionFailed(format!(
-                        "Failed to fetch transaction history: {}",
-                        e
-                    ))
-                })?;
+        // Fetch transaction signatures for the pool account
+        let signatures = self
+            .rpc_client
+            .get_signatures_for_address(&pool_pda)
+            .await
+            .map_err(|e| {
+                RelayerError::TransactionFailed(format!(
+                    "Failed to fetch transaction history: {}",
+                    e
+                ))
+            })?;
 
-            info!(
-                "Found {} transactions for pool {}",
-                signatures.len(),
-                bucket_id
-            );
+        info!(
+            "Found {} transactions for pool {}",
+            signatures.len(),
+            bucket_id
+        );
 
-            // CRITICAL SAFETY: If there are too many transactions (>50), we CANNOT safely sync
-            // This prevents 20+ second delays on devnet where logs are often pruned anyway
-            // HOWEVER: We MUST NOT silently continue with an empty tree as this causes PERMANENT FUND LOSS
-            if signatures.len() > 50 {
-                error!(
-                    "❌ CRITICAL: Too many transactions ({}) to scan efficiently for bucket {}",
-                    signatures.len(), bucket_id
-                );
-                error!("❌ Cannot safely sync merkle tree from transaction history");
-                error!("❌ Continuing with empty tree would cause PERMANENT FUND LOSS for existing deposits");
-                error!("❌ RELAYER MUST BE STOPPED - Manual intervention required");
-                error!("");
-                error!("Recovery options:");
-                error!("  1. Restore merkle_state/ directory from backup");
-                error!("  2. Use a full archive node with complete transaction history");
-                error!("  3. Manually reconstruct tree from known commitments");
-                error!("");
-                error!("Set ALLOW_UNSAFE_EMPTY_TREE=true to override (NOT RECOMMENDED)");
-                
-                // Check if unsafe override is enabled
-                if std::env::var("ALLOW_UNSAFE_EMPTY_TREE").unwrap_or_default() != "true" {
-                    return Err(RelayerError::MerkleTree(format!(
-                        "Cannot sync merkle tree for bucket {} - too many transactions ({}) and no backup available. \
-                        This would cause permanent fund loss. Relayer halted for safety. \
-                        Restore merkle_state/ from backup or set ALLOW_UNSAFE_EMPTY_TREE=true to override (NOT RECOMMENDED).",
-                        bucket_id, signatures.len()
-                    )));
-                }
-                
-                warn!("⚠ UNSAFE OVERRIDE ENABLED - Continuing with empty tree");
-                warn!("⚠ Old deposits (if any) will NOT be withdrawable!");
-                warn!("⚠ This should ONLY be used for fresh deployments with no existing deposits");
-
-                // Reset the tree to empty and continue (only if override is set)
-                self.merkle_service
-                    .sync_from_chain(bucket_id, vec![])
-                    .await?;
-
-                return Ok(());
+        // Parse deposit events from transaction logs
+        // We'll scan as many as needed to recover all deposits
+        let mut commitments = Vec::new();
+        let max_to_scan = std::cmp::min(signatures.len(), 200); // Cap at 200 for safety
+        
+        info!("Scanning up to {} transactions to recover {} deposits...", max_to_scan, on_chain_size);
+        
+        for sig_info in signatures.iter().rev().take(max_to_scan) {
+            // Only scan last 20 transactions
+            // Skip failed transactions
+            if sig_info.err.is_some() {
+                continue;
             }
 
-            // Parse deposit events from transaction logs (only scan recent transactions)
-            let mut commitments = Vec::new();
-            for sig_info in signatures.iter().rev().take(20) {
-                // Only scan last 20 transactions
-                // Skip failed transactions
-                if sig_info.err.is_some() {
-                    continue;
-                }
+            // Fetch full transaction to get logs
+            let signature = sig_info.signature.parse().map_err(|e| {
+                RelayerError::InvalidRequest(format!("Invalid signature: {}", e))
+            })?;
 
-                // Fetch full transaction to get logs
-                let signature = sig_info.signature.parse().map_err(|e| {
-                    RelayerError::InvalidRequest(format!("Invalid signature: {}", e))
-                })?;
-
-                match self
-                    .rpc_client
+            match self
+                .rpc_client
                     .get_transaction(&signature, UiTransactionEncoding::Json)
                     .await
                 {
@@ -430,66 +439,93 @@ impl DepositService {
                         warn!("Failed to fetch transaction {}: {}", signature, e);
                     }
                 }
-            }
+        }
 
-            if commitments.is_empty() {
-                error!(
-                    "❌ CRITICAL: Could not find any commitments in transaction history for bucket {}",
-                    bucket_id
+        // Check if we found any commitments
+        if commitments.is_empty() {
+            // No commitments found in transaction logs
+            // This is only a problem if on-chain says there SHOULD be deposits
+            if on_chain_size > 0 {
+                warn!(
+                    "Could not find commitments in transaction history for bucket {} ({} deposits on-chain)",
+                    bucket_id, on_chain_size
                 );
-                error!("❌ This may happen if transactions are too old or logs are not available");
-                error!("❌ Continuing with empty tree would cause PERMANENT FUND LOSS for existing deposits");
-                error!("❌ RELAYER MUST BE STOPPED - Manual intervention required");
-                error!("");
-                error!("Recovery options:");
-                error!("  1. Restore merkle_state/ directory from backup");
-                error!("  2. Use a full archive node with complete transaction history");
-                error!("  3. Manually reconstruct tree from known commitments");
-                error!("");
-                error!("Set ALLOW_UNSAFE_EMPTY_TREE=true to override (NOT RECOMMENDED)");
-
-                // Check if unsafe override is enabled
-                if std::env::var("ALLOW_UNSAFE_EMPTY_TREE").unwrap_or_default() != "true" {
-                    return Err(RelayerError::MerkleTree(format!(
-                        "Cannot sync merkle tree for bucket {} - no commitments found in transaction history. \
-                        This would cause permanent fund loss. Relayer halted for safety. \
-                        Restore merkle_state/ from backup or set ALLOW_UNSAFE_EMPTY_TREE=true to override (NOT RECOMMENDED).",
+                warn!("Transaction logs are likely pruned (common on devnet after a few days)");
+                warn!("Without transaction logs or backups, these deposits cannot be recovered");
+                
+                // Check if this is devnet (testing environment)
+                let rpc_url = std::env::var("RPC_URL").unwrap_or_default();
+                let is_devnet = rpc_url.contains("devnet") || rpc_url.contains("testnet");
+                
+                if is_devnet {
+                    warn!("Detected devnet environment - resetting to fresh tree");
+                    warn!("⚠️  {} existing deposits will become UNWITHDRAWABLE", on_chain_size);
+                    warn!("⚠️  This is acceptable for devnet testing");
+                    warn!("⚠️  For production, ALWAYS maintain merkle_state backups");
+                    
+                    // Reset to fresh tree for devnet
+                    self.merkle_service
+                        .sync_from_chain(bucket_id, vec![])
+                        .await?;
+                    return Ok(());
+                } else {
+                    // Production environment - must have backups
+                    error!(
+                        "❌ CRITICAL: Could not find any commitments in transaction history for bucket {}",
                         bucket_id
+                    );
+                    error!("❌ On-chain has {} deposits but transaction logs are empty/pruned", on_chain_size);
+                    error!("❌ This may happen if transactions are too old or logs are not available");
+                    error!("❌ Continuing with empty tree would cause PERMANENT FUND LOSS for existing deposits");
+                    error!("❌ RELAYER MUST BE STOPPED - Manual intervention required");
+                    error!("");
+                    error!("Recovery options:");
+                    error!("  1. Restore merkle_state/ directory from backup");
+                    error!("  2. Use a full archive node with complete transaction history");
+                    error!("  3. Manually reconstruct tree from known commitments");
+                    error!("");
+
+                    return Err(RelayerError::MerkleTree(format!(
+                        "Cannot sync merkle tree for bucket {} - no commitments found in transaction history but {} deposits exist on-chain. \
+                        This would cause permanent fund loss. Relayer halted for safety. \
+                        Restore merkle_state/ from backup.",
+                        bucket_id, on_chain_size
                     )));
                 }
-
-                warn!("⚠ UNSAFE OVERRIDE ENABLED - Continuing with empty tree");
-                warn!("⚠ Old deposits (if any) will NOT be withdrawable!");
-                warn!("⚠ This should ONLY be used for fresh deployments with no existing deposits");
-
-                // Reset the tree to empty and continue (only if override is set)
+            } else {
+                // on_chain_size is 0, so no deposits to recover
+                // The transactions we found were probably for other operations (init, etc.)
+                info!(
+                    "No commitments found in transaction history for bucket {}, but on-chain size is 0 (fresh pool)",
+                    bucket_id
+                );
+                // Initialize with empty tree
                 self.merkle_service
                     .sync_from_chain(bucket_id, vec![])
                     .await?;
-
                 return Ok(());
             }
+        }
 
-            info!(
-                "Found {} commitments from transaction history",
-                commitments.len()
+        info!(
+            "Found {} commitments from transaction history",
+            commitments.len()
+        );
+
+        // Rebuild local tree with found commitments
+        self.merkle_service
+            .sync_from_chain(bucket_id, commitments)
+            .await?;
+
+        let new_local_size = self.merkle_service.size(bucket_id).await.unwrap_or(0) as u64;
+        if new_local_size != on_chain_size {
+            warn!(
+                "After sync: local size {} still doesn't match on-chain size {}",
+                new_local_size, on_chain_size
             );
-
-            // Rebuild local tree with found commitments
-            self.merkle_service
-                .sync_from_chain(bucket_id, commitments)
-                .await?;
-
-            let new_local_size = self.merkle_service.size(bucket_id).await.unwrap_or(0) as u64;
-            if new_local_size != on_chain_size {
-                warn!(
-                    "After sync: local size {} still doesn't match on-chain size {}",
-                    new_local_size, on_chain_size
-                );
-                warn!("Some commitments may be missing from transaction history.");
-            } else {
-                info!("✓ Successfully synced local tree with on-chain state");
-            }
+            warn!("Some commitments may be missing from transaction history.");
+        } else {
+            info!("✓ Successfully synced local tree with on-chain state");
         }
 
         Ok(())
@@ -508,16 +544,96 @@ impl DepositService {
     }
 
     async fn check_token_not_used(&self, token_hash: &[u8; 32]) -> Result<()> {
+        // First check local cache (fast path)
         let store = self.token_store.read().await;
         if store.contains(token_hash) {
             return Err(RelayerError::TokenAlreadyRedeemed);
         }
-        Ok(())
+        drop(store);
+
+        // Also verify against on-chain state (defense in depth)
+        // This protects against local store corruption or loss
+        let (used_token_pda, _) =
+            Pubkey::find_program_address(&[b"used_token", token_hash], &self.config.program_id);
+
+        match self.rpc_client.get_account(&used_token_pda).await {
+            Ok(_account) => {
+                // Token exists on-chain, it's been used
+                warn!(
+                    "Token {} found on-chain but not in local store - adding to local cache",
+                    hex::encode(token_hash)
+                );
+                // Update local cache to match on-chain reality
+                let mut store = self.token_store.write().await;
+                store.insert(*token_hash)?;
+                return Err(RelayerError::TokenAlreadyRedeemed);
+            }
+            Err(_) => {
+                // Token doesn't exist on-chain, it's not been used
+                Ok(())
+            }
+        }
     }
 
     async fn mark_token_used(&self, token_hash: [u8; 32]) -> Result<()> {
         let mut store = self.token_store.write().await;
         store.insert(token_hash)
+    }
+
+    /// Rebuild token store from on-chain UsedToken accounts
+    /// This can be used to recover from token store corruption
+    pub async fn rebuild_token_store_from_chain(&self) -> Result<usize> {
+        info!("Rebuilding token store from on-chain UsedToken accounts...");
+        
+        // Get all program accounts with UsedToken discriminator
+        // UsedToken discriminator is the first 8 bytes of sha256("account:UsedToken")
+        let discriminator = {
+            use sha2::{Digest, Sha256};
+            let hash = Sha256::digest(b"account:UsedToken");
+            let mut disc = [0u8; 8];
+            disc.copy_from_slice(&hash[..8]);
+            disc
+        };
+
+        // Fetch all accounts owned by the program
+        let accounts = self
+            .rpc_client
+            .get_program_accounts(&self.config.program_id)
+            .await
+            .map_err(|e| {
+                RelayerError::TransactionFailed(format!("Failed to fetch program accounts: {}", e))
+            })?;
+
+        let mut count = 0;
+        let mut store = self.token_store.write().await;
+
+        for (_pubkey, account) in accounts {
+            // Check if this is a UsedToken account (discriminator match)
+            if account.data.len() >= 8 && &account.data[0..8] == &discriminator {
+                // Parse token_hash from account data
+                // UsedToken layout: discriminator(8) + token_hash(32) + redeemed_at(8) + bump(1)
+                if account.data.len() >= 40 {
+                    let mut token_hash = [0u8; 32];
+                    token_hash.copy_from_slice(&account.data[8..40]);
+                    
+                    store.insert(token_hash)?;
+                    count += 1;
+                    
+                    if count % 100 == 0 {
+                        info!("Rebuilt {} used tokens so far...", count);
+                    }
+                }
+            }
+        }
+
+        info!("✓ Rebuilt token store with {} used tokens from on-chain", count);
+        Ok(count)
+    }
+
+    /// Get token store statistics (for monitoring)
+    pub async fn get_token_store_stats(&self) -> (usize, [u8; 32]) {
+        let store = self.token_store.read().await;
+        (store.len(), store.checksum)
     }
 
     async fn execute_deposit(
