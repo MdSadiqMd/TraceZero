@@ -11,7 +11,7 @@ use solana_sdk::{
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 use crate::config::RelayerConfig;
@@ -65,6 +65,8 @@ pub struct WithdrawalService {
     historical_roots: Arc<RwLock<Vec<HashMap<[u8; 32], TimestampedRoot>>>>,
     /// Pending withdrawals we need to execute after timelock
     pending_withdrawals: Arc<RwLock<Vec<PendingWithdrawalRecord>>>,
+    /// Per-recipient locks to prevent concurrent pre-funding races
+    recipient_locks: Arc<RwLock<HashMap<Pubkey, Arc<Mutex<()>>>>>,
 }
 
 impl WithdrawalService {
@@ -81,7 +83,27 @@ impl WithdrawalService {
             merkle_service,
             historical_roots: Arc::new(RwLock::new(historical_roots)),
             pending_withdrawals: Arc::new(RwLock::new(Vec::new())),
+            recipient_locks: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Get or create a lock for a specific recipient (prevents concurrent pre-funding)
+    async fn get_recipient_lock(&self, recipient: &Pubkey) -> Arc<Mutex<()>> {
+        // Try to get existing lock (read lock)
+        {
+            let locks = self.recipient_locks.read().await;
+            if let Some(lock) = locks.get(recipient) {
+                return Arc::clone(lock);
+            }
+        }
+
+        // Create new lock (write lock)
+        let mut locks = self.recipient_locks.write().await;
+        // Double-check in case another thread created it
+        locks
+            .entry(*recipient)
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
     }
 
     /// Record current root as historical (call after each deposit)
@@ -386,6 +408,12 @@ impl WithdrawalService {
         &self,
         record: &PendingWithdrawalRecord,
     ) -> Result<String> {
+        // Acquire per-recipient lock to prevent concurrent pre-funding races
+        // This ensures only one withdrawal at a time can pre-fund the same recipient
+        // The lock is held for the entire execution to prevent TOCTOU issues
+        let recipient_lock = self.get_recipient_lock(&record.recipient).await;
+        let _guard = recipient_lock.lock().await;
+
         let relayer = &self.config.keypair;
 
         // Derive all required PDAs
