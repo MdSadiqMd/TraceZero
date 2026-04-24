@@ -428,35 +428,74 @@ async fn sign_blinded(
         if let solana_transaction_status::EncodedTransaction::Json(ui_tx) =
             &tx_info.transaction.transaction
         {
-            // Extract account keys based on message type
-            let account_keys: Vec<solana_sdk::pubkey::Pubkey> = match &ui_tx.message {
-                solana_transaction_status::UiMessage::Parsed(parsed) => parsed
-                    .account_keys
-                    .iter()
-                    .filter_map(|k| solana_sdk::pubkey::Pubkey::from_str(&k.pubkey).ok())
-                    .collect(),
-                solana_transaction_status::UiMessage::Raw(raw) => raw
-                    .account_keys
-                    .iter()
-                    .filter_map(|k| solana_sdk::pubkey::Pubkey::from_str(k).ok())
-                    .collect(),
+            // Extract account keys and signer information based on message type
+            let (account_keys, signers): (Vec<solana_sdk::pubkey::Pubkey>, Vec<bool>) = match &ui_tx.message {
+                solana_transaction_status::UiMessage::Parsed(parsed) => {
+                    let keys: Vec<_> = parsed
+                        .account_keys
+                        .iter()
+                        .filter_map(|k| solana_sdk::pubkey::Pubkey::from_str(&k.pubkey).ok())
+                        .collect();
+                    let signer_flags: Vec<_> = parsed
+                        .account_keys
+                        .iter()
+                        .map(|k| k.signer)
+                        .collect();
+                    (keys, signer_flags)
+                },
+                solana_transaction_status::UiMessage::Raw(raw) => {
+                    let keys: Vec<_> = raw
+                        .account_keys
+                        .iter()
+                        .filter_map(|k| solana_sdk::pubkey::Pubkey::from_str(k).ok())
+                        .collect();
+                    // In raw messages, the first N accounts are signers (where N = num_required_signatures)
+                    // For safety, we'll extract this from the message header
+                    let num_signers = raw.header.num_required_signatures as usize;
+                    let signer_flags: Vec<_> = (0..keys.len())
+                        .map(|i| i < num_signers)
+                        .collect();
+                    (keys, signer_flags)
+                },
             };
 
             // Find relayer's account index
             if let Some(relayer_idx) = account_keys.iter().position(|k| *k == relayer_pubkey) {
                 // Find payer's account index
-                if let Some(_payer_idx) = account_keys.iter().position(|k| *k == payer_pubkey) {
+                if let Some(payer_idx) = account_keys.iter().position(|k| *k == payer_pubkey) {
+                    // SECURITY: Verify payer is a signer (H-03 fix)
+                    if !signers.get(payer_idx).copied().unwrap_or(false) {
+                        return Err(RelayerError::InvalidRequest(format!(
+                            "Security violation: Payer {} is not a signer on the transaction. \
+                            This prevents free-riding attacks where User A submits User B's payment.",
+                            payer_pubkey
+                        )));
+                    }
+
                     // Check that relayer received funds and payer sent funds
                     let relayer_pre: u64 = pre_balances[relayer_idx];
                     let relayer_post: u64 = post_balances[relayer_idx];
+                    let payer_pre: u64 = pre_balances[payer_idx];
+                    let payer_post: u64 = post_balances[payer_idx];
+                    
                     let relayer_received = relayer_post.saturating_sub(relayer_pre);
+                    let payer_sent = payer_pre.saturating_sub(payer_post);
+
+                    // Verify payer actually sent funds (balance decreased)
+                    if payer_sent == 0 {
+                        return Err(RelayerError::InvalidRequest(format!(
+                            "Security violation: Payer {} did not send any funds in this transaction. \
+                            Balance unchanged: {} lamports",
+                            payer_pubkey, payer_pre
+                        )));
+                    }
 
                     // Payer sent includes tx fee, so we check relayer received
                     if relayer_received >= expected_payment {
                         payment_verified = true;
                         info!(
-                            "Payment verified: {} lamports from {} (expected {})",
-                            relayer_received, payer_pubkey, expected_payment
+                            "✓ Payment verified: {} lamports from {} (expected {}), payer sent {} lamports total",
+                            relayer_received, payer_pubkey, expected_payment, payer_sent
                         );
                     } else {
                         return Err(RelayerError::InvalidRequest(format!(
@@ -464,7 +503,17 @@ async fn sign_blinded(
                             relayer_received, expected_payment
                         )));
                     }
+                } else {
+                    return Err(RelayerError::InvalidRequest(format!(
+                        "Payer {} not found in transaction accounts",
+                        payer_pubkey
+                    )));
                 }
+            } else {
+                return Err(RelayerError::InvalidRequest(format!(
+                    "Treasury {} not found in transaction accounts",
+                    relayer_pubkey
+                )));
             }
         }
     }
