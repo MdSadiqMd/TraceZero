@@ -26,6 +26,8 @@ use crate::merkle_service::MerkleService;
 struct TokenStore {
     /// In-memory cache for fast lookups
     cache: HashSet<[u8; 32]>,
+    /// Tokens currently being processed (pending)
+    pending: HashSet<[u8; 32]>,
     /// Path to persistence file
     path: PathBuf,
     /// Checksum of the current store state
@@ -125,14 +127,32 @@ impl TokenStore {
         let checksum = Self::compute_checksum(&cache);
         Self {
             cache,
+            pending: HashSet::new(),
             path,
             checksum,
         }
     }
 
-    /// Check if token is used
-    fn contains(&self, hash: &[u8; 32]) -> bool {
-        self.cache.contains(hash)
+    /// Atomically check and reserve token (prevents TOCTOU race)
+    /// Returns true if token was successfully reserved, false if already used/pending
+    fn try_reserve(&mut self, hash: [u8; 32]) -> bool {
+        if self.cache.contains(&hash) || self.pending.contains(&hash) {
+            false
+        } else {
+            self.pending.insert(hash);
+            true
+        }
+    }
+
+    /// Commit a reserved token (move from pending to used)
+    fn commit(&mut self, hash: [u8; 32]) -> Result<()> {
+        self.pending.remove(&hash);
+        self.insert(hash)
+    }
+
+    /// Rollback a reserved token (remove from pending)
+    fn rollback(&mut self, hash: [u8; 32]) {
+        self.pending.remove(&hash);
     }
 
     /// Mark token as used and persist with checksum
@@ -227,63 +247,94 @@ impl DepositService {
         // 1. Verify the signed credit
         self.verify_credit(&request.credit).await?;
 
-        // 2. Check token not already redeemed
+        // 2. Atomically check and reserve token (prevents TOCTOU race)
         let token_hash = hash_token_id(&request.credit.token_id);
-        self.check_token_not_used(&token_hash).await?;
+        let reserved = {
+            let mut store = self.token_store.write().await;
+            store.try_reserve(token_hash)
+        };
 
-        // 3. Get bucket ID from amount
-        let bucket_id = get_bucket_id(request.credit.amount)
-            .ok_or(RelayerError::InvalidBucket(request.credit.amount))?;
-
-        // 4. Fetch on-chain next_index FIRST to ensure sync
-        let on_chain_next_index = self.get_on_chain_next_index(bucket_id).await?;
-        let local_size = self.merkle_service.size(bucket_id).await.unwrap_or(0) as u64;
-
-        // Verify local tree is in sync with on-chain state
-        if local_size != on_chain_next_index {
-            warn!(
-                "Local tree out of sync with on-chain: local={}, on-chain={}. Syncing...",
-                local_size, on_chain_next_index
-            );
-            // Sync local tree to match on-chain state
-            self.sync_local_tree(bucket_id, on_chain_next_index).await?;
+        if !reserved {
+            return Err(RelayerError::TokenAlreadyRedeemed);
         }
 
-        // 5. Update local merkle tree to get the new root
-        let leaf_index = self
-            .merkle_service
-            .insert(bucket_id, request.commitment)
-            .await?;
-        let merkle_root = self.merkle_service.root(bucket_id).await?;
+        // Token is now reserved - if anything fails, we must rollback
+        let result = async {
+            // Also verify against on-chain state (defense in depth)
+            self.verify_token_not_on_chain(&token_hash).await?;
 
-        // 6. Execute deposit on-chain with the merkle root
-        // Pass the on-chain next_index to ensure PDA derivation matches
-        let tx_signature = self
-            .execute_deposit(
-                bucket_id,
-                request.commitment,
-                token_hash,
-                request.encrypted_note,
-                merkle_root,
-                on_chain_next_index,
-            )
-            .await?;
+            // 3. Get bucket ID from amount
+            let bucket_id = get_bucket_id(request.credit.amount)
+                .ok_or(RelayerError::InvalidBucket(request.credit.amount))?;
 
-        // 7. Mark token as used (persisted to prevent double-spend)
-        self.mark_token_used(token_hash).await?;
+            // 4. Fetch on-chain next_index FIRST to ensure sync
+            let on_chain_next_index = self.get_on_chain_next_index(bucket_id).await?;
+            let local_size = self.merkle_service.size(bucket_id).await.unwrap_or(0) as u64;
 
-        info!(
-            "Deposit successful: bucket={}, leaf_index={}, tx={}",
-            bucket_id, leaf_index, tx_signature
-        );
+            // Verify local tree is in sync with on-chain state
+            if local_size != on_chain_next_index {
+                warn!(
+                    "Local tree out of sync with on-chain: local={}, on-chain={}. Syncing...",
+                    local_size, on_chain_next_index
+                );
+                // Sync local tree to match on-chain state
+                self.sync_local_tree(bucket_id, on_chain_next_index).await?;
+            }
 
-        Ok(DepositResponse {
-            success: true,
-            tx_signature: Some(tx_signature),
-            leaf_index: Some(leaf_index),
-            merkle_root: Some(hex::encode(merkle_root)),
-            error: None,
-        })
+            // 5. Update local merkle tree to get the new root
+            let leaf_index = self
+                .merkle_service
+                .insert(bucket_id, request.commitment)
+                .await?;
+            let merkle_root = self.merkle_service.root(bucket_id).await?;
+
+            // 6. Execute deposit on-chain with the merkle root
+            // Pass the on-chain next_index to ensure PDA derivation matches
+            let tx_signature = self
+                .execute_deposit(
+                    bucket_id,
+                    request.commitment,
+                    token_hash,
+                    request.encrypted_note,
+                    merkle_root,
+                    on_chain_next_index,
+                )
+                .await?;
+
+            Ok((bucket_id, leaf_index, merkle_root, tx_signature))
+        }
+        .await;
+
+        match result {
+            Ok((bucket_id, leaf_index, merkle_root, tx_signature)) => {
+                // Success - commit the token reservation
+                {
+                    let mut store = self.token_store.write().await;
+                    store.commit(token_hash)?;
+                }
+
+                info!(
+                    "Deposit successful: bucket={}, leaf_index={}, tx={}",
+                    bucket_id, leaf_index, tx_signature
+                );
+
+                Ok(DepositResponse {
+                    success: true,
+                    tx_signature: Some(tx_signature),
+                    leaf_index: Some(leaf_index),
+                    merkle_root: Some(hex::encode(merkle_root)),
+                    error: None,
+                })
+            }
+            Err(e) => {
+                // Failure - rollback the token reservation
+                {
+                    let mut store = self.token_store.write().await;
+                    store.rollback(token_hash);
+                }
+                Err(e)
+            }
+        }
     }
 
     async fn get_on_chain_next_index(&self, bucket_id: u8) -> Result<u64> {
@@ -543,16 +594,8 @@ impl DepositService {
         Ok(())
     }
 
-    async fn check_token_not_used(&self, token_hash: &[u8; 32]) -> Result<()> {
-        // First check local cache (fast path)
-        let store = self.token_store.read().await;
-        if store.contains(token_hash) {
-            return Err(RelayerError::TokenAlreadyRedeemed);
-        }
-        drop(store);
-
-        // Also verify against on-chain state (defense in depth)
-        // This protects against local store corruption or loss
+    /// Verify token doesn't exist on-chain (defense in depth)
+    async fn verify_token_not_on_chain(&self, token_hash: &[u8; 32]) -> Result<()> {
         let (used_token_pda, _) =
             Pubkey::find_program_address(&[b"used_token", token_hash], &self.config.program_id);
 
@@ -560,24 +603,19 @@ impl DepositService {
             Ok(_account) => {
                 // Token exists on-chain, it's been used
                 warn!(
-                    "Token {} found on-chain but not in local store - adding to local cache",
+                    "Token {} found on-chain but not in local store - updating local cache",
                     hex::encode(token_hash)
                 );
                 // Update local cache to match on-chain reality
                 let mut store = self.token_store.write().await;
                 store.insert(*token_hash)?;
-                return Err(RelayerError::TokenAlreadyRedeemed);
+                Err(RelayerError::TokenAlreadyRedeemed)
             }
             Err(_) => {
                 // Token doesn't exist on-chain, it's not been used
                 Ok(())
             }
         }
-    }
-
-    async fn mark_token_used(&self, token_hash: [u8; 32]) -> Result<()> {
-        let mut store = self.token_store.write().await;
-        store.insert(token_hash)
     }
 
     /// Rebuild token store from on-chain UsedToken accounts
