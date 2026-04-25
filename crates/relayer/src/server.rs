@@ -23,6 +23,7 @@ use crate::config::{calculate_total_with_fee, get_bucket_id, RelayerConfig, BUCK
 use crate::deposit::DepositService;
 use crate::error::RelayerError;
 use crate::merkle_service::MerkleService;
+use crate::rate_limiter::{ExpensiveOpRateLimiter, RateLimitConfig, validate_proof_structure};
 use crate::withdrawal::WithdrawalService;
 
 use privacy_proxy_sdk::deposit::{DepositRequest, DepositResponse};
@@ -63,6 +64,8 @@ pub struct RelayerState {
     /// X25519 keypair for ECDH key exchange (payload encryption)
     pub ecdh_secret: StaticSecret,
     pub ecdh_pubkey: X25519PublicKey,
+    /// Rate limiter for expensive operations (H-04 fix)
+    pub rate_limiter: Arc<ExpensiveOpRateLimiter>,
 }
 
 impl RelayerState {
@@ -93,6 +96,26 @@ impl RelayerState {
         let ecdh_pubkey = X25519PublicKey::from(&ecdh_secret);
         info!("Generated X25519 keypair for ECDH key exchange");
 
+        // Initialize rate limiter for expensive operations (H-04 fix)
+        let rate_limit_config = RateLimitConfig::default();
+        info!(
+            "Initialized rate limiter: {} withdrawals/min, {} deposits/min, {} proofs/min",
+            rate_limit_config.max_withdrawals_per_minute,
+            rate_limit_config.max_deposits_per_minute,
+            rate_limit_config.max_proofs_per_minute
+        );
+        let rate_limiter = Arc::new(ExpensiveOpRateLimiter::new(rate_limit_config));
+
+        // Spawn background cleanup task
+        let rate_limiter_clone = rate_limiter.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+            loop {
+                interval.tick().await;
+                rate_limiter_clone.cleanup().await;
+            }
+        });
+
         Ok(Self {
             config,
             rpc_client,
@@ -102,6 +125,7 @@ impl RelayerState {
             withdrawal_service,
             ecdh_secret,
             ecdh_pubkey,
+            rate_limiter,
         })
     }
 }
@@ -543,6 +567,13 @@ async fn handle_deposit(
     State(state): State<Arc<RelayerState>>,
     Json(payload): Json<DepositPayload>,
 ) -> std::result::Result<Json<DepositResponse>, RelayerError> {
+    // H-04 FIX: Check deposit rate limit before expensive operations
+    state
+        .rate_limiter
+        .check_deposit()
+        .await
+        .map_err(|e| RelayerError::RateLimitExceeded(e))?;
+
     let client_pk_bytes = hex::decode(&payload.client_pubkey)
         .map_err(|_| RelayerError::InvalidRequest("Invalid client public key".into()))?;
     if client_pk_bytes.len() != 32 {
@@ -623,6 +654,28 @@ async fn handle_withdrawal(
     State(state): State<Arc<RelayerState>>,
     Json(req): Json<WithdrawalRequestWrapper>,
 ) -> std::result::Result<Json<WithdrawalResponse>, RelayerError> {
+    // H-04 FIX: Validate proof structure before expensive operations
+    validate_proof_structure(
+        &req.request.proof.a,
+        &req.request.proof.b,
+        &req.request.proof.c,
+    )
+    .map_err(|e| RelayerError::InvalidRequest(format!("Invalid proof structure: {}", e)))?;
+
+    // H-04 FIX: Check rate limits before expensive operations
+    state
+        .rate_limiter
+        .check_withdrawal(&req.request.public_inputs.nullifier_hash)
+        .await
+        .map_err(|e| RelayerError::RateLimitExceeded(e))?;
+
+    // H-04 FIX: Check proof verification rate limit
+    state
+        .rate_limiter
+        .check_proof_verification()
+        .await
+        .map_err(|e| RelayerError::RateLimitExceeded(e))?;
+
     let response = state
         .withdrawal_service
         .handle_withdrawal(req.request, req.delay_hours)

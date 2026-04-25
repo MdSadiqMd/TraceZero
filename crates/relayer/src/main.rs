@@ -9,6 +9,7 @@ mod deposit;
 mod encryption;
 mod error;
 mod merkle_service;
+mod rate_limiter;
 mod server;
 mod withdrawal;
 

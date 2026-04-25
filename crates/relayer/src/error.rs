@@ -39,6 +39,9 @@ pub enum RelayerError {
 
     #[error("Solana client error: {0}")]
     SolanaClient(#[from] solana_client::client_error::ClientError),
+
+    #[error("Rate limit exceeded: {0}")]
+    RateLimitExceeded(String),
 }
 
 impl IntoResponse for RelayerError {
@@ -56,6 +59,7 @@ impl IntoResponse for RelayerError {
             RelayerError::Crypto(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             RelayerError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             RelayerError::SolanaClient(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+            RelayerError::RateLimitExceeded(_) => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
         };
 
         let body = Json(json!({
