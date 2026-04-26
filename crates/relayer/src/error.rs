@@ -42,6 +42,9 @@ pub enum RelayerError {
 
     #[error("Rate limit exceeded: {0}")]
     RateLimitExceeded(String),
+
+    #[error("Insufficient balance: required {required} lamports, available {available} lamports")]
+    InsufficientBalance { required: u64, available: u64 },
 }
 
 impl IntoResponse for RelayerError {
@@ -60,6 +63,7 @@ impl IntoResponse for RelayerError {
             RelayerError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             RelayerError::SolanaClient(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             RelayerError::RateLimitExceeded(_) => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
+            RelayerError::InsufficientBalance { .. } => (StatusCode::SERVICE_UNAVAILABLE, self.to_string()),
         };
 
         let body = Json(json!({

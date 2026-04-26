@@ -247,7 +247,15 @@ impl DepositService {
         // 1. Verify the signed credit
         self.verify_credit(&request.credit).await?;
 
-        // 2. Atomically check and reserve token (prevents TOCTOU race)
+        // 2. Get bucket ID from amount (needed for balance check)
+        let bucket_id = get_bucket_id(request.credit.amount)
+            .ok_or(RelayerError::InvalidBucket(request.credit.amount))?;
+
+        // 3. H-05 FIX: Check relayer balance BEFORE reserving token
+        // This prevents burning tokens when relayer is insolvent
+        self.check_relayer_balance(bucket_id).await?;
+
+        // 4. Atomically check and reserve token (prevents TOCTOU race)
         let token_hash = hash_token_id(&request.credit.token_id);
         let reserved = {
             let mut store = self.token_store.write().await;
@@ -263,11 +271,7 @@ impl DepositService {
             // Also verify against on-chain state (defense in depth)
             self.verify_token_not_on_chain(&token_hash).await?;
 
-            // 3. Get bucket ID from amount
-            let bucket_id = get_bucket_id(request.credit.amount)
-                .ok_or(RelayerError::InvalidBucket(request.credit.amount))?;
-
-            // 4. Fetch on-chain next_index FIRST to ensure sync
+            // 5. Fetch on-chain next_index FIRST to ensure sync
             let on_chain_next_index = self.get_on_chain_next_index(bucket_id).await?;
             let local_size = self.merkle_service.size(bucket_id).await.unwrap_or(0) as u64;
 
@@ -281,14 +285,14 @@ impl DepositService {
                 self.sync_local_tree(bucket_id, on_chain_next_index).await?;
             }
 
-            // 5. Update local merkle tree to get the new root
+            // 6. Update local merkle tree to get the new root
             let leaf_index = self
                 .merkle_service
                 .insert(bucket_id, request.commitment)
                 .await?;
             let merkle_root = self.merkle_service.root(bucket_id).await?;
 
-            // 6. Execute deposit on-chain with the merkle root
+            // 7. Execute deposit on-chain with the merkle root
             // Pass the on-chain next_index to ensure PDA derivation matches
             let tx_signature = self
                 .execute_deposit(
@@ -589,6 +593,70 @@ impl DepositService {
             .await?;
         if !is_valid {
             return Err(RelayerError::InvalidSignature);
+        }
+
+        Ok(())
+    }
+
+    /// H-05 FIX: Check relayer has sufficient balance before accepting deposit
+    /// This prevents burning user tokens when relayer is insolvent
+    async fn check_relayer_balance(&self, bucket_id: u8) -> Result<()> {
+        use crate::config::BUCKET_AMOUNTS;
+        
+        let relayer_pubkey = self.config.keypair.pubkey();
+        let required_amount = BUCKET_AMOUNTS[bucket_id as usize];
+        
+        // Fetch relayer's current balance
+        let balance = self
+            .rpc_client
+            .get_balance(&relayer_pubkey)
+            .await
+            .map_err(|e| {
+                RelayerError::Internal(format!("Failed to fetch relayer balance: {}", e))
+            })?;
+
+        // Calculate minimum required balance:
+        // - Deposit amount (goes to pool)
+        // - Transaction fee (~5000 lamports)
+        // - Rent for UsedToken account (~1 SOL for safety)
+        // - Rent for Note account (~1 SOL for safety)
+        // - Safety buffer (0.1 SOL)
+        const TX_FEE: u64 = 5_000;
+        const RENT_BUFFER: u64 = 2_100_000_000; // ~2.1 SOL for rent + safety
+        let minimum_balance = required_amount + TX_FEE + RENT_BUFFER;
+
+        if balance < minimum_balance {
+            error!(
+                "❌ Relayer insolvency detected! Balance: {} lamports ({} SOL), Required: {} lamports ({} SOL)",
+                balance,
+                balance as f64 / 1_000_000_000.0,
+                minimum_balance,
+                minimum_balance as f64 / 1_000_000_000.0
+            );
+            error!(
+                "❌ Cannot accept deposit for bucket {} (amount: {} lamports)",
+                bucket_id, required_amount
+            );
+            error!("❌ Rejecting deposit to prevent burning user's token");
+            error!("");
+            error!("Action required: Fund relayer wallet {} with at least {} SOL",
+                relayer_pubkey,
+                (minimum_balance - balance) as f64 / 1_000_000_000.0
+            );
+
+            return Err(RelayerError::InsufficientBalance {
+                required: minimum_balance,
+                available: balance,
+            });
+        }
+
+        // Log warning if balance is getting low (< 10 SOL)
+        const LOW_BALANCE_THRESHOLD: u64 = 10_000_000_000; // 10 SOL
+        if balance < LOW_BALANCE_THRESHOLD {
+            warn!(
+                "⚠ Relayer balance is low: {} SOL. Consider funding soon.",
+                balance as f64 / 1_000_000_000.0
+            );
         }
 
         Ok(())
