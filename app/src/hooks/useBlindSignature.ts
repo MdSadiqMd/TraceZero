@@ -4,6 +4,7 @@ import { PublicKey, SystemProgram, Transaction } from "@solana/web3.js";
 import {
   blindMessage,
   unblindSignature,
+  verifySignature,
   parsePublicKey,
   type RSAPublicKey,
 } from "@/lib/blind";
@@ -113,7 +114,6 @@ export function useBlindSignature() {
         const paymentSig = await sendTransaction(paymentTx, connection);
 
         // Wait for confirmation (use 'finalized' for devnet reliability)
-        console.log("Waiting for payment confirmation...");
         const confirmation = await connection.confirmTransaction(
           paymentSig,
           "finalized",
@@ -122,15 +122,8 @@ export function useBlindSignature() {
           throw new Error("Payment transaction failed");
         }
 
-        console.log("Payment confirmed:", paymentSig);
-        console.log(
-          "View on explorer:",
-          `https://explorer.solana.com/tx/${paymentSig}?cluster=devnet`,
-        );
-
         // Extra delay to ensure RPC nodes have synced (devnet can be slow)
         // The relayer will also retry fetching the transaction
-        console.log("Waiting for RPC propagation...");
         await new Promise((resolve) => setTimeout(resolve, 10000));
         setState((s) => ({ ...s, isPaying: false }));
 
@@ -164,6 +157,16 @@ export function useBlindSignature() {
           rsaPubkey,
         );
         setState((s) => ({ ...s, isUnblinding: false }));
+
+        const isValid = await verifySignature(tokenId, signature, rsaPubkey);
+        if (!isValid) {
+          throw new Error(
+            "Signature verification failed! The relayer returned an invalid signature. " +
+            "This could be due to a bug, corruption, or malicious behavior. " +
+            "Your payment was processed but the credit is invalid. " +
+            "Please contact support with your payment transaction: " + paymentSig
+          );
+        }
 
         return { tokenId, signature };
       } catch (error) {

@@ -116,12 +116,6 @@ export function formatProofForSolana(proof: Groth16Proof): Uint8Array {
   // Negate Y coordinate: Y_neg = p - Y (where p is the BN254 base field modulus)
   const pi_a_y_neg = BN254_P - pi_a_y;
 
-  console.log("=== Proof A Negation Debug ===");
-  console.log("Original pi_a_y:", pi_a_y.toString(16));
-  console.log("BN254_P:", BN254_P.toString(16));
-  console.log("Negated pi_a_y:", pi_a_y_neg.toString(16));
-  console.log("=== End Negation Debug ===");
-
   writeFieldElement(proofBytes, 0, pi_a_x);
   writeFieldElement(proofBytes, 32, pi_a_y_neg); // Negated Y for groth16-solana
 
