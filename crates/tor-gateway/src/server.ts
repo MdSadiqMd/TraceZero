@@ -7,17 +7,35 @@ const TOR_SOCKS_HOST = process.env.TOR_SOCKS_HOST || "127.0.0.1";
 const TOR_SOCKS_PORT = process.env.TOR_SOCKS_PORT || "9050";
 const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT || "3080", 10);
 
+const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",")
+  : [
+      "http://localhost:3000",
+      "http://localhost:4173",
+      "http://127.0.0.1:3000",
+      "http://127.0.0.1:5173",
+    ];
+
 const torProxyUrl = `socks5h://${TOR_SOCKS_HOST}:${TOR_SOCKS_PORT}`;
 const agent = new SocksProxyAgent(torProxyUrl);
 
-app.use((_req: Request, res: Response, next: NextFunction) => {
-  res.header("Access-Control-Allow-Origin", "*");
+app.use((req: Request, res: Response, next: NextFunction) => {
+  const origin = req.headers.origin;
+  if (origin && ALLOWED_ORIGINS.includes(origin)) {
+    res.header("Access-Control-Allow-Origin", origin);
+    res.header("Access-Control-Allow-Credentials", "true");
+  } else if (!origin) {
+    console.warn(`[CORS] Request without origin header from ${req.ip}`);
+  } else {
+    console.warn(`[CORS] Blocked request from unauthorized origin: ${origin}`);
+  }
+
   res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
   res.header(
     "Access-Control-Allow-Headers",
     "Origin, X-Requested-With, Content-Type, Accept",
   );
-  if (_req.method === "OPTIONS") {
+  if (req.method === "OPTIONS") {
     res.sendStatus(200);
     return;
   }

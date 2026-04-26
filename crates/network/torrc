@@ -1,10 +1,19 @@
-SocksPort 0.0.0.0:9050
+# H-07 FIX: Secure Tor SOCKS proxy configuration
+
+# Bind to localhost only (not 0.0.0.0) to prevent network-wide exposure
+# In Docker, this still allows connections from other containers via host.docker.internal
+SocksPort 127.0.0.1:9050
 
 DataDirectory /var/lib/tor
 
 Log notice stdout
-Log info stdout # remove in prod
 
-SafeLogging 0
+# SafeLogging 1 scrubs potentially sensitive information from logs
+SafeLogging 1
 
-SocksPolicy accept * # allowing connections from docker network
+# Accept connections from Docker internal network (172.16.0.0/12)
+# This covers the typical Docker bridge network range
+SocksPolicy accept 172.16.0.0/12
+SocksPolicy accept 127.0.0.1
+# Reject all other connections
+SocksPolicy reject *
