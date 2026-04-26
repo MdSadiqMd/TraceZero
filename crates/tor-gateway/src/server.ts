@@ -49,6 +49,94 @@ app.get("/health", (_req: Request, res: Response) => {
   res.json({ status: "ok", tor: torProxyUrl });
 });
 
+const ALLOWED_RELAYER_HOSTS = process.env.ALLOWED_RELAYER_HOSTS
+  ? process.env.ALLOWED_RELAYER_HOSTS.split(",")
+  : ["localhost", "127.0.0.1", "host.docker.internal"];
+
+function validateProxyUrl(urlString: string): { valid: boolean; error?: string; url?: URL } {
+  try {
+    const url = new URL(urlString);
+
+    // 1. Only allow HTTP and HTTPS schemes
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return { valid: false, error: `Unsupported protocol: ${url.protocol}. Only http:// and https:// are allowed.` };
+    }
+
+    // 2. Block private IP ranges (RFC 1918, link-local, loopback except allowed hosts)
+    const hostname = url.hostname.toLowerCase();
+    
+    // Check if it's an IP address
+    const ipv4Regex = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
+    const ipMatch = hostname.match(ipv4Regex);
+    
+    if (ipMatch) {
+      const octets = ipMatch.slice(1).map(Number);
+      
+      // Block cloud metadata endpoints (169.254.169.254)
+      if (octets[0] === 169 && octets[1] === 254 && octets[2] === 169 && octets[3] === 254) {
+        return { valid: false, error: "Access to cloud metadata endpoints is blocked" };
+      }
+      
+      // Block link-local addresses (169.254.0.0/16)
+      if (octets[0] === 169 && octets[1] === 254) {
+        return { valid: false, error: "Access to link-local addresses is blocked" };
+      }
+      
+      // Block private networks (RFC 1918)
+      // 10.0.0.0/8
+      if (octets[0] === 10) {
+        return { valid: false, error: "Access to private network 10.0.0.0/8 is blocked" };
+      }
+      // 172.16.0.0/12
+      if (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) {
+        return { valid: false, error: "Access to private network 172.16.0.0/12 is blocked" };
+      }
+      // 192.168.0.0/16
+      if (octets[0] === 192 && octets[1] === 168) {
+        return { valid: false, error: "Access to private network 192.168.0.0/16 is blocked" };
+      }
+      
+      // Allow localhost/loopback (127.0.0.0/8) only if in allowed list
+      if (octets[0] === 127) {
+        if (!ALLOWED_RELAYER_HOSTS.includes(hostname) && !ALLOWED_RELAYER_HOSTS.includes("127.0.0.1")) {
+          return { valid: false, error: "Access to loopback addresses is restricted" };
+        }
+      }
+    }
+    
+    // 3. Whitelist allowed hostnames (localhost, relayer host)
+    const isAllowedHost = ALLOWED_RELAYER_HOSTS.some(allowed => 
+      hostname === allowed.toLowerCase() || hostname.endsWith(`.${allowed.toLowerCase()}`)
+    );
+    
+    if (!isAllowedHost) {
+      // For non-whitelisted hosts, they must be external (not private IPs)
+      // This allows Tor to access external services but blocks internal network
+      if (ipMatch) {
+        return { valid: false, error: "Access to this IP address is not allowed" };
+      }
+      // Allow external domain names (they'll go through Tor)
+    }
+
+    // 4. Block common internal hostnames
+    const blockedHostnames = [
+      "metadata.google.internal",
+      "metadata",
+      "kubernetes",
+      "consul",
+      "etcd",
+    ];
+    
+    if (blockedHostnames.some(blocked => hostname.includes(blocked))) {
+      return { valid: false, error: "Access to internal service hostnames is blocked" };
+    }
+
+    return { valid: true, url };
+  } catch (error) {
+    return { valid: false, error: `Invalid URL: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 app.all("/proxy", async (req: Request, res: Response, next: NextFunction) => {
   const targetUrl = req.query.url as string;
   if (!targetUrl) {
@@ -56,11 +144,18 @@ app.all("/proxy", async (req: Request, res: Response, next: NextFunction) => {
     return;
   }
 
+  const validation = validateProxyUrl(targetUrl);
+  if (!validation.valid) {
+    console.warn(`[proxy] Blocked SSRF attempt: ${targetUrl} - ${validation.error}`);
+    res.status(403).json({ error: validation.error });
+    return;
+  }
+
   try {
     const fetchModule = await import("node-fetch");
     const fetch = fetchModule.default;
 
-    const url = new URL(targetUrl);
+    const url = validation.url!;
     const isLocalhost =
       url.hostname === "localhost" || url.hostname === "127.0.0.1";
 

@@ -36,6 +36,8 @@ impl Config {
         self
     }
 
+    // This prevents accidental use in production which would enable MITM attacks
+    #[cfg(test)]
     pub fn without_tls_verification(mut self) -> Self {
         self.verify_tls = false;
         self
