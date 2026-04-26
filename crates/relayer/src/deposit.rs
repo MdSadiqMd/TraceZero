@@ -269,7 +269,8 @@ impl DepositService {
         // Token is now reserved - if anything fails, we must rollback
         let result = async {
             // Also verify against on-chain state (defense in depth)
-            self.verify_token_not_on_chain(&token_hash).await?;
+            // Pass bucket_id to prevent cross-pool token replay
+            self.verify_token_not_on_chain(bucket_id, &token_hash).await?;
 
             // 5. Fetch on-chain next_index FIRST to ensure sync
             let on_chain_next_index = self.get_on_chain_next_index(bucket_id).await?;
@@ -663,24 +664,52 @@ impl DepositService {
     }
 
     /// Verify token doesn't exist on-chain (defense in depth)
-    async fn verify_token_not_on_chain(&self, token_hash: &[u8; 32]) -> Result<()> {
-        let (used_token_pda, _) =
-            Pubkey::find_program_address(&[b"used_token", token_hash], &self.config.program_id);
+    /// M-04 FIX: Check both new (with bucket_id) and legacy (without bucket_id) PDAs
+    /// This ensures backward compatibility during mainnet upgrade
+    async fn verify_token_not_on_chain(&self, bucket_id: u8, token_hash: &[u8; 32]) -> Result<()> {
+        // Check new format (with bucket_id) - this is what we'll create
+        let (used_token_pda, _) = Pubkey::find_program_address(
+            &[b"used_token", &[bucket_id], token_hash],
+            &self.config.program_id,
+        );
 
         match self.rpc_client.get_account(&used_token_pda).await {
             Ok(_account) => {
-                // Token exists on-chain, it's been used
+                // Token exists on-chain in new format
                 warn!(
-                    "Token {} found on-chain but not in local store - updating local cache",
+                    "Token {} found on-chain (new format) but not in local store - updating local cache",
                     hex::encode(token_hash)
                 );
                 // Update local cache to match on-chain reality
                 let mut store = self.token_store.write().await;
                 store.insert(*token_hash)?;
-                Err(RelayerError::TokenAlreadyRedeemed)
+                return Err(RelayerError::TokenAlreadyRedeemed);
             }
             Err(_) => {
-                // Token doesn't exist on-chain, it's not been used
+                // Token doesn't exist in new format, check legacy format
+            }
+        }
+
+        // Check legacy format (without bucket_id) for backward compatibility
+        let (legacy_token_pda, _) = Pubkey::find_program_address(
+            &[b"used_token", token_hash],
+            &self.config.program_id,
+        );
+
+        match self.rpc_client.get_account(&legacy_token_pda).await {
+            Ok(_account) => {
+                // Token exists on-chain in legacy format
+                warn!(
+                    "Token {} found on-chain (legacy format) - token was used before M-04 upgrade",
+                    hex::encode(token_hash)
+                );
+                // Update local cache to match on-chain reality
+                let mut store = self.token_store.write().await;
+                store.insert(*token_hash)?;
+                return Err(RelayerError::TokenAlreadyRedeemed);
+            }
+            Err(_) => {
+                // Token doesn't exist in either format - OK to use
                 Ok(())
             }
         }
@@ -764,8 +793,10 @@ impl DepositService {
             &self.config.program_id,
         );
 
-        let (used_token_pda, _) =
-            Pubkey::find_program_address(&[b"used_token", &token_hash], &self.config.program_id);
+        let (used_token_pda, _) = Pubkey::find_program_address(
+            &[b"used_token", &[bucket_id], &token_hash],
+            &self.config.program_id,
+        );
 
         // Use the on-chain next_index for note PDA derivation
         // This ensures we match what the on-chain program expects
@@ -802,9 +833,9 @@ impl DepositService {
                 AccountMeta::new_readonly(config_pda, false), // config
                 AccountMeta::new(pool_pda, false),        // pool (mut)
                 AccountMeta::new(historical_roots_pda, false), // historical_roots (mut)
-                AccountMeta::new(used_token_pda, false),  // used_token (init)
+                AccountMeta::new(used_token_pda, false),  // used_token (init, new format)
                 AccountMeta::new(note_pda, false),        // encrypted_note (init)
-                AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+                AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false), // system_program
             ],
             data,
         };

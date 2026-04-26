@@ -45,11 +45,13 @@ pub struct Deposit<'info> {
     pub historical_roots: Account<'info, HistoricalRoots>,
 
     /// Used token record - prevents double-redemption
+    /// Include bucket_id in seeds to prevent token replay across pools
+    /// Uses new format with bucket_id for security
     #[account(
         init,
         payer = relayer,
         space = UsedToken::SIZE,
-        seeds = [USED_TOKEN_SEED, &token_hash],
+        seeds = [USED_TOKEN_SEED, &[bucket_id], &token_hash],
         bump,
     )]
     pub used_token: Account<'info, UsedToken>,
@@ -132,6 +134,7 @@ pub fn handler(
         .ok_or(PrivacyProxyError::Overflow)?;
 
     // Mark token as used
+    used_token.bucket_id = bucket_id;
     used_token.token_hash = token_hash;
     used_token.redeemed_at = Clock::get()?.unix_timestamp;
     used_token.bump = ctx.bumps.used_token;
