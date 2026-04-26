@@ -3,6 +3,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use ark_bn254::Fr;
+use ark_ff::{BigInteger, PrimeField};
 use light_poseidon::{Poseidon, PoseidonBytesHasher};
 use rand::RngCore;
 
@@ -40,10 +41,18 @@ pub fn random_secret() -> [u8; 32] {
 /// Reduce a 32-byte value to be within BN254 field
 /// This ensures the value is less than the field modulus
 pub fn reduce_to_field(value: &[u8; 32]) -> [u8; 32] {
-    let mut result = *value;
-    // Simple reduction: mask top bits to ensure value < modulus
-    // BN254 modulus is ~2^254, so we clear the top 2 bits
-    result[0] &= 0x1F;
+    // Convert bytes to field element (this automatically performs modular reduction)
+    // Fr::from_be_bytes_mod_order handles values >= modulus correctly
+    let field_element = Fr::from_be_bytes_mod_order(value);
+    
+    // Convert back to bytes (big-endian)
+    let mut result = [0u8; 32];
+    let bytes = field_element.into_bigint().to_bytes_be();
+    
+    // Pad with zeros if needed (field elements are always < 32 bytes)
+    let offset = 32 - bytes.len();
+    result[offset..].copy_from_slice(&bytes);
+    
     result
 }
 
@@ -229,5 +238,86 @@ mod tests {
 
         let non_zero = random_secret();
         assert!(validate_non_zero(&non_zero).is_ok());
+    }
+
+    #[test]
+    fn test_field_reduction_below_modulus() {
+        // Test value that's already below modulus (should remain unchanged)
+        let value = [
+            0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        ];
+        let reduced = reduce_to_field(&value);
+        assert_eq!(value, reduced, "Value below modulus should remain unchanged");
+    }
+
+    #[test]
+    fn test_field_reduction_at_modulus() {
+        // Test value exactly at modulus (should be reduced to 0)
+        let modulus = [
+            0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29,
+            0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
+            0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91,
+            0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x01,
+        ];
+        let reduced = reduce_to_field(&modulus);
+        
+        // Should be reduced (modulus - modulus = 0)
+        let zero = [0u8; 32];
+        assert_eq!(reduced, zero, "Value at modulus should reduce to zero");
+    }
+
+    #[test]
+    fn test_field_reduction_above_modulus() {
+        // Test value above modulus (should be reduced)
+        let value = [
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+            0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+        ];
+        let reduced = reduce_to_field(&value);
+        
+        // Reduced value should be less than modulus
+        let modulus = [
+            0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29,
+            0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
+            0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91,
+            0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x01,
+        ];
+        
+        // Compare byte by byte
+        for i in 0..32 {
+            if reduced[i] < modulus[i] {
+                return; // Test passes - reduced is less than modulus
+            } else if reduced[i] > modulus[i] {
+                panic!("Reduced value is greater than modulus at byte {}", i);
+            }
+        }
+        // If we get here, reduced == modulus, which should not happen
+        panic!("Reduced value equals modulus (should be less)");
+    }
+
+    #[test]
+    fn test_field_reduction_edge_case() {
+        // Test value just above modulus (modulus + 1)
+        let value = [
+            0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29,
+            0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
+            0x28, 0x33, 0xe8, 0x48, 0x79, 0xb9, 0x70, 0x91,
+            0x43, 0xe1, 0xf5, 0x93, 0xf0, 0x00, 0x00, 0x02,
+        ];
+        let reduced = reduce_to_field(&value);
+        
+        // Should reduce to 1
+        let expected = [
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        ];
+        assert_eq!(reduced, expected, "Modulus + 1 should reduce to 1");
     }
 }

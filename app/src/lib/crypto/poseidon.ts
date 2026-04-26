@@ -112,17 +112,26 @@ export async function generateNullifierHash(
   return poseidonHashWithDomain(DOMAIN_NULLIFIER, [nullifierBigInt]);
 }
 
+// BN254 field modulus (scalar field order)
+// p = 21888242871839275222246405745257275088548364400416034343698204186575808495617
+const BN254_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+
 /**
  * Reduce a 32-byte value to be within BN254 field
  * This ensures the value is less than the field modulus
  * MUST match SDK's reduce_to_field function
  */
 function reduceToField(value: Uint8Array): Uint8Array {
-  const result = new Uint8Array(value);
-  // Simple reduction: mask top bits to ensure value < modulus
-  // BN254 modulus is ~2^254, so we clear the top 3 bits (0x1F = 00011111)
-  result[0] &= 0x1f;
-  return result;
+  // Convert to bigint
+  let valueBigInt = bytesToBigInt(value);
+  
+  // Perform modular reduction if value >= modulus
+  if (valueBigInt >= BN254_MODULUS) {
+    valueBigInt = valueBigInt % BN254_MODULUS;
+  }
+  
+  // Convert back to bytes
+  return bigIntToBytes(valueBigInt, 32);
 }
 
 /**
