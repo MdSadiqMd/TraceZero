@@ -122,36 +122,59 @@ pub fn handler(ctx: Context<ExecuteWithdrawal>) -> Result<()> {
         PrivacyProxyError::Overflow
     );
 
-    // Direct lamport transfer from pool (program-owned PDA) to recipient
-    // This works because:
-    // 1. Pool is owned by our program, so we can debit it
-    // 2. Any account can receive lamports (credit)
-    // 3. The recipient will be created if it doesn't exist, as long as it receives >= rent-exempt minimum
-
-    // Debit pool and credit recipient
+    // Atomic lamport transfers
+    // Calculate all balances first, then apply all changes atomically
+    // This ensures either all transfers succeed or all fail
     let pool_info = pool.to_account_info();
     let recipient_info = ctx.accounts.recipient.to_account_info();
     let treasury_info = ctx.accounts.relayer_treasury.to_account_info();
 
-    // Transfer amount to recipient
-    **pool_info.try_borrow_mut_lamports()? = pool_info
-        .lamports()
+    // Get current balances
+    let pool_balance = pool_info.lamports();
+    let recipient_balance = recipient_info.lamports();
+    let treasury_balance = treasury_info.lamports();
+
+    // Verify pool has sufficient funds
+    require!(
+        pool_balance >= pending.amount + pending.fee,
+        PrivacyProxyError::Overflow
+    );
+
+    // Calculate new balances (all checked arithmetic)
+    let new_pool_balance = pool_balance
         .checked_sub(pending.amount)
+        .and_then(|b| b.checked_sub(pending.fee))
         .ok_or(PrivacyProxyError::Overflow)?;
-    **recipient_info.try_borrow_mut_lamports()? = recipient_info
-        .lamports()
+    
+    let new_recipient_balance = recipient_balance
         .checked_add(pending.amount)
         .ok_or(PrivacyProxyError::Overflow)?;
-
-    // Transfer fee to relayer treasury
-    **pool_info.try_borrow_mut_lamports()? = pool_info
-        .lamports()
-        .checked_sub(pending.fee)
-        .ok_or(PrivacyProxyError::Overflow)?;
-    **treasury_info.try_borrow_mut_lamports()? = treasury_info
-        .lamports()
+    
+    let new_treasury_balance = treasury_balance
         .checked_add(pending.fee)
         .ok_or(PrivacyProxyError::Overflow)?;
+
+    // Verify conservation of lamports (total before = total after)
+    let total_before = pool_balance
+        .checked_add(recipient_balance)
+        .and_then(|t| t.checked_add(treasury_balance))
+        .ok_or(PrivacyProxyError::Overflow)?;
+    
+    let total_after = new_pool_balance
+        .checked_add(new_recipient_balance)
+        .and_then(|t| t.checked_add(new_treasury_balance))
+        .ok_or(PrivacyProxyError::Overflow)?;
+    
+    require!(
+        total_before == total_after,
+        PrivacyProxyError::Overflow
+    );
+
+    // Apply all balance changes atomically
+    // If any of these fail, the entire transaction reverts
+    **pool_info.try_borrow_mut_lamports()? = new_pool_balance;
+    **recipient_info.try_borrow_mut_lamports()? = new_recipient_balance;
+    **treasury_info.try_borrow_mut_lamports()? = new_treasury_balance;
 
     // Update pool anonymity set
     pool.anonymity_set_size = pool.anonymity_set_size.saturating_sub(1);
