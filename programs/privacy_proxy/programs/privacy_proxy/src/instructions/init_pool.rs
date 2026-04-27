@@ -11,18 +11,12 @@ use crate::state::{DepositPool, GlobalConfig, HistoricalRoots, HISTORICAL_ROOTS_
 #[instruction(bucket_id: u8)]
 pub struct InitPool<'info> {
     /// Admin initializing the pool
-    #[account(
-        mut,
-        constraint = admin.key() == config.admin @ PrivacyProxyError::UnauthorizedRelayer
-    )]
+    #[account(mut)]
     pub admin: Signer<'info>,
 
-    /// Global config
-    #[account(
-        seeds = [CONFIG_SEED],
-        bump = config.bump,
-    )]
-    pub config: Account<'info, GlobalConfig>,
+    /// Global config - we only read admin field
+    /// CHECK: We manually verify this is the correct config PDA in the handler
+    pub config: UncheckedAccount<'info>,
 
     /// Deposit pool to initialize
     #[account(
@@ -48,6 +42,35 @@ pub struct InitPool<'info> {
 }
 
 pub fn handler(ctx: Context<InitPool>, bucket_id: u8) -> Result<()> {
+    // Verify config is the correct PDA
+    let (expected_config_pda, _) = Pubkey::find_program_address(
+        &[CONFIG_SEED],
+        ctx.program_id,
+    );
+    require!(
+        ctx.accounts.config.key() == expected_config_pda,
+        PrivacyProxyError::UnauthorizedRelayer
+    );
+    
+    // Manually deserialize only the fields we need from GlobalConfig
+    let config_data = ctx.accounts.config.try_borrow_data()?;
+    
+    // GlobalConfig layout:
+    // Offset 8: admin (32 bytes)
+    if config_data.len() < 40 {
+        return Err(PrivacyProxyError::UnauthorizedRelayer.into());
+    }
+    
+    let mut admin_bytes = [0u8; 32];
+    admin_bytes.copy_from_slice(&config_data[8..40]);
+    let admin = Pubkey::new_from_array(admin_bytes);
+    
+    // Verify admin matches
+    require!(
+        ctx.accounts.admin.key() == admin,
+        PrivacyProxyError::UnauthorizedRelayer
+    );
+    
     // Validate bucket ID
     require!(
         (bucket_id as usize) < NUM_BUCKETS,

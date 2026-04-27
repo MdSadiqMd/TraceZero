@@ -9,6 +9,7 @@ pub struct InitializeParams {
     pub authorized_relayer: Pubkey,
     pub relayer_signing_key_n: [u8; 256],
     pub relayer_signing_key_e: [u8; 4],
+    pub relayer_ecdh_pubkey: [u8; 32], // M-08 FIX: Add ECDH public key
     pub fee_bps: u16,
 }
 
@@ -37,6 +38,7 @@ pub fn handler(ctx: Context<Initialize>, params: InitializeParams) -> Result<()>
     config.authorized_relayer = params.authorized_relayer;
     config.relayer_signing_key_n = params.relayer_signing_key_n;
     config.relayer_signing_key_e = params.relayer_signing_key_e;
+    config.relayer_ecdh_pubkey = params.relayer_ecdh_pubkey; // M-08 FIX
     config.fee_bps = params.fee_bps;
     config.min_delay_hours = MIN_DELAY_HOURS;
     config.max_delay_hours = MAX_DELAY_HOURS;

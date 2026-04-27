@@ -15,18 +15,12 @@ use crate::state::{
 #[instruction(bucket_id: u8, commitment: [u8; 32], token_hash: [u8; 32])]
 pub struct Deposit<'info> {
     /// Relayer executing the deposit (pays fees and funds)
-    #[account(
-        mut,
-        constraint = relayer.key() == config.authorized_relayer @ PrivacyProxyError::UnauthorizedRelayer
-    )]
+    #[account(mut)]
     pub relayer: Signer<'info>,
 
-    /// Global config
-    #[account(
-        seeds = [CONFIG_SEED],
-        bump = config.bump,
-    )]
-    pub config: Account<'info, GlobalConfig>,
+    /// Global config - we only read authorized_relayer field
+    /// CHECK: We manually verify this is the correct config PDA in the handler
+    pub config: UncheckedAccount<'info>,
 
     /// Deposit pool for this bucket
     #[account(
@@ -77,14 +71,56 @@ pub fn handler(
     encrypted_note_data: Vec<u8>,
     merkle_root: [u8; 32], // Actual Merkle root from relayer
 ) -> Result<()> {
-    let config = &ctx.accounts.config;
+    // Verify config is the correct PDA
+    let (expected_config_pda, _) = Pubkey::find_program_address(
+        &[CONFIG_SEED],
+        ctx.program_id,
+    );
+    require!(
+        ctx.accounts.config.key() == expected_config_pda,
+        PrivacyProxyError::UnauthorizedRelayer
+    );
+    
+    // Manually deserialize only the fields we need from GlobalConfig
+    // This avoids loading the entire 300+ byte struct onto the stack
+    let config_data = ctx.accounts.config.try_borrow_data()?;
+    
+    // OLD GlobalConfig layout (434 bytes):
+    // 8: discriminator
+    // 32: admin (8-39)
+    // 32: relayer_treasury (40-71)
+    // 32: authorized_relayer (72-103)
+    // 256: relayer_signing_key_n (104-359)
+    // 4: relayer_signing_key_e (360-363)
+    // 2: fee_bps (364-365)
+    // 1: min_delay_hours (366)
+    // 1: max_delay_hours (367)
+    // 1: paused (368)
+    // 1: bump (369)
+    // 64: padding (370-433)
+    
+    if config_data.len() < 369 {
+        return Err(PrivacyProxyError::UnauthorizedRelayer.into());
+    }
+    
+    let mut authorized_relayer_bytes = [0u8; 32];
+    authorized_relayer_bytes.copy_from_slice(&config_data[72..104]);
+    let authorized_relayer = Pubkey::new_from_array(authorized_relayer_bytes);
+    
+    // Verify relayer is authorized
+    require!(
+        ctx.accounts.relayer.key() == authorized_relayer,
+        PrivacyProxyError::UnauthorizedRelayer
+    );
+    
+    // Check if paused (at offset 368)
+    let paused = config_data[368] != 0;
+    require!(!paused, PrivacyProxyError::ProtocolPaused);
+
     let pool = &mut ctx.accounts.pool;
     let historical_roots = &mut ctx.accounts.historical_roots;
     let used_token = &mut ctx.accounts.used_token;
     let note = &mut ctx.accounts.encrypted_note;
-
-    // Check protocol not paused
-    require!(!config.paused, PrivacyProxyError::ProtocolPaused);
 
     // Validate bucket
     require!(

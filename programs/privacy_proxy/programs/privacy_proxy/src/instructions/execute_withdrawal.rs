@@ -14,12 +14,9 @@ pub struct ExecuteWithdrawal<'info> {
     #[account(mut)]
     pub executor: Signer<'info>,
 
-    /// Global config
-    #[account(
-        seeds = [CONFIG_SEED],
-        bump = config.bump,
-    )]
-    pub config: Account<'info, GlobalConfig>,
+    /// Global config - we only read paused and relayer_treasury
+    /// CHECK: We manually verify this is the correct config PDA in the handler
+    pub config: UncheckedAccount<'info>,
 
     /// Deposit pool (source of funds)
     #[account(
@@ -54,24 +51,62 @@ pub struct ExecuteWithdrawal<'info> {
     pub recipient: AccountInfo<'info>,
 
     /// Relayer treasury receives fee
-    /// CHECK: Validated against config
-    #[account(
-        mut,
-        constraint = relayer_treasury.key() == config.relayer_treasury @ PrivacyProxyError::UnauthorizedRelayer,
-    )]
+    /// CHECK: We manually verify this matches config.relayer_treasury
+    #[account(mut)]
     pub relayer_treasury: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
 }
 
 pub fn handler(ctx: Context<ExecuteWithdrawal>) -> Result<()> {
-    let config = &ctx.accounts.config;
+    // Verify config is the correct PDA
+    let (expected_config_pda, _) = Pubkey::find_program_address(
+        &[CONFIG_SEED],
+        ctx.program_id,
+    );
+    require!(
+        ctx.accounts.config.key() == expected_config_pda,
+        PrivacyProxyError::UnauthorizedRelayer
+    );
+    
+    // Manually deserialize only the fields we need from GlobalConfig
+    let config_data = ctx.accounts.config.try_borrow_data()?;
+    
+    // OLD GlobalConfig layout (434 bytes):
+    // 8: discriminator
+    // 32: admin (8-39)
+    // 32: relayer_treasury (40-71)
+    // 32: authorized_relayer (72-103)
+    // 256: relayer_signing_key_n (104-359)
+    // 4: relayer_signing_key_e (360-363)
+    // 2: fee_bps (364-365)
+    // 1: min_delay_hours (366)
+    // 1: max_delay_hours (367)
+    // 1: paused (368)
+    // 1: bump (369)
+    // 64: padding (370-433)
+    
+    if config_data.len() < 369 {
+        return Err(PrivacyProxyError::ProtocolPaused.into());
+    }
+    
+    let mut relayer_treasury_bytes = [0u8; 32];
+    relayer_treasury_bytes.copy_from_slice(&config_data[40..72]);
+    let relayer_treasury = Pubkey::new_from_array(relayer_treasury_bytes);
+    let paused = config_data[368] != 0;
+    
+    // Verify relayer_treasury matches
+    require!(
+        ctx.accounts.relayer_treasury.key() == relayer_treasury,
+        PrivacyProxyError::UnauthorizedRelayer
+    );
+    
     let pool = &mut ctx.accounts.pool;
     let pending = &mut ctx.accounts.pending_withdrawal;
     let nullifier = &mut ctx.accounts.nullifier;
 
     // Check protocol not paused
-    require!(!config.paused, PrivacyProxyError::ProtocolPaused);
+    require!(!paused, PrivacyProxyError::ProtocolPaused);
 
     // Check timelock has expired
     let clock = Clock::get()?;

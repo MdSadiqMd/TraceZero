@@ -29,6 +29,11 @@ pub struct GlobalConfig {
     /// Whether protocol is paused
     pub paused: bool,
 
+    /// M-08 FIX: Relayer's ECDH X25519 public key for encrypted communication (32 bytes)
+    /// This key is authenticated on-chain to prevent MITM attacks
+    /// Clients MUST verify this matches the key received from /info endpoint
+    pub relayer_ecdh_pubkey: [u8; 32],
+
     /// PDA bump
     pub bump: u8,
 }
@@ -45,6 +50,7 @@ impl Default for GlobalConfig {
             min_delay_hours: 0,
             max_delay_hours: 0,
             paused: false,
+            relayer_ecdh_pubkey: [0u8; 32],
             bump: 0,
         }
     }
@@ -61,6 +67,7 @@ impl GlobalConfig {
         1 + // min_delay_hours
         1 + // max_delay_hours
         1 + // paused
+        32 + // relayer_ecdh_pubkey (M-08 FIX)
         1 + // bump
-        64; // padding for future use
+        32; // padding for future use (reduced from 64)
 }

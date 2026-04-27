@@ -17,11 +17,9 @@ pub struct CancelWithdrawal<'info> {
     #[account(mut)]
     pub relayer: Signer<'info>,
 
-    #[account(
-        seeds = [CONFIG_SEED],
-        bump = config.bump,
-    )]
-    pub config: Account<'info, GlobalConfig>,
+    /// Global config - we only read paused
+    /// CHECK: We manually verify this is the correct config PDA in the handler
+    pub config: UncheckedAccount<'info>,
 
     #[account(
         mut,
@@ -44,10 +42,41 @@ pub fn handler(
     proof_c: [u8; 64],
     binding_hash: [u8; 32], // Circuit output - binding hash
 ) -> Result<()> {
-    let config = &ctx.accounts.config;
+    // Verify config is the correct PDA
+    let (expected_config_pda, _) = Pubkey::find_program_address(
+        &[CONFIG_SEED],
+        ctx.program_id,
+    );
+    require!(
+        ctx.accounts.config.key() == expected_config_pda,
+        PrivacyProxyError::UnauthorizedRelayer
+    );
+    
+    // Manually deserialize only the fields we need from GlobalConfig
+    let config_data = ctx.accounts.config.try_borrow_data()?;
+    
+    // OLD GlobalConfig layout (434 bytes):
+    // 8: discriminator
+    // 32: admin (8-39)
+    // 32: relayer_treasury (40-71)
+    // 32: authorized_relayer (72-103)
+    // 256: relayer_signing_key_n (104-359)
+    // 4: relayer_signing_key_e (360-363)
+    // 2: fee_bps (364-365)
+    // 1: min_delay_hours (366)
+    // 1: max_delay_hours (367)
+    // 1: paused (368)
+    // 1: bump (369)
+    // 64: padding (370-433)
+    
+    if config_data.len() < 369 {
+        return Err(PrivacyProxyError::ProtocolPaused.into());
+    }
+    
+    let paused = config_data[368] != 0;
     let pending = &mut ctx.accounts.pending_withdrawal;
 
-    require!(!config.paused, PrivacyProxyError::ProtocolPaused);
+    require!(!paused, PrivacyProxyError::ProtocolPaused);
 
     // Verify ownership proof via CPI to zk_verifier, it outputs binding hash that is verified
     verify_ownership_proof_cpi(

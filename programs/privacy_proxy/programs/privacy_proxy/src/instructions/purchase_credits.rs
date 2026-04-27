@@ -14,19 +14,13 @@ pub struct PurchaseCredits<'info> {
     pub user: Signer<'info>,
 
     /// Relayer treasury receives payment
-    /// CHECK: Validated against config
-    #[account(
-        mut,
-        constraint = relayer_treasury.key() == config.relayer_treasury @ PrivacyProxyError::UnauthorizedRelayer
-    )]
+    /// CHECK: We manually verify this matches config.relayer_treasury
+    #[account(mut)]
     pub relayer_treasury: AccountInfo<'info>,
 
-    /// Global config
-    #[account(
-        seeds = [CONFIG_SEED],
-        bump = config.bump,
-    )]
-    pub config: Account<'info, GlobalConfig>,
+    /// Global config - we only read paused and fee_bps
+    /// CHECK: We manually verify this is the correct config PDA in the handler
+    pub config: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }
@@ -36,13 +30,54 @@ pub fn handler(
     amount_lamports: u64,
     blinded_token: [u8; 256],
 ) -> Result<()> {
-    let config = &ctx.accounts.config;
+    // Verify config is the correct PDA
+    let (expected_config_pda, _) = Pubkey::find_program_address(
+        &[CONFIG_SEED],
+        ctx.program_id,
+    );
+    require!(
+        ctx.accounts.config.key() == expected_config_pda,
+        PrivacyProxyError::UnauthorizedRelayer
+    );
+    
+    // Manually deserialize only the fields we need from GlobalConfig
+    let config_data = ctx.accounts.config.try_borrow_data()?;
+    
+    // OLD GlobalConfig layout (434 bytes):
+    // 8: discriminator
+    // 32: admin (8-39)
+    // 32: relayer_treasury (40-71)
+    // 32: authorized_relayer (72-103)
+    // 256: relayer_signing_key_n (104-359)
+    // 4: relayer_signing_key_e (360-363)
+    // 2: fee_bps (364-365)
+    // 1: min_delay_hours (366)
+    // 1: max_delay_hours (367)
+    // 1: paused (368)
+    // 1: bump (369)
+    // 64: padding (370-433)
+    
+    if config_data.len() < 369 {
+        return Err(PrivacyProxyError::ProtocolPaused.into());
+    }
+    
+    let mut relayer_treasury_bytes = [0u8; 32];
+    relayer_treasury_bytes.copy_from_slice(&config_data[40..72]);
+    let relayer_treasury = Pubkey::new_from_array(relayer_treasury_bytes);
+    let fee_bps = u16::from_le_bytes([config_data[364], config_data[365]]);
+    let paused = config_data[368] != 0;
+    
+    // Verify relayer_treasury matches
+    require!(
+        ctx.accounts.relayer_treasury.key() == relayer_treasury,
+        PrivacyProxyError::UnauthorizedRelayer
+    );
 
     // Check protocol not paused
-    require!(!config.paused, PrivacyProxyError::ProtocolPaused);
+    require!(!paused, PrivacyProxyError::ProtocolPaused);
 
     // Validate amount is for a valid bucket + fee
-    let base_amount = find_bucket_amount(amount_lamports, config.fee_bps)?;
+    let base_amount = find_bucket_amount(amount_lamports, fee_bps)?;
 
     // Validate blinded token is not empty (basic sanity check)
     require!(

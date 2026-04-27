@@ -38,12 +38,9 @@ pub struct RequestWithdrawal<'info> {
     #[account(mut)]
     pub relayer: Signer<'info>,
 
-    /// Global config
-    #[account(
-        seeds = [CONFIG_SEED],
-        bump = config.bump,
-    )]
-    pub config: Account<'info, GlobalConfig>,
+    /// Global config - we only read min/max delay hours
+    /// CHECK: We manually verify this is the correct config PDA in the handler
+    pub config: UncheckedAccount<'info>,
 
     /// Deposit pool
     #[account(
@@ -99,12 +96,48 @@ pub fn handler(
     binding_hash: [u8; 32],  // Computed off-chain, verified by ZK proof
     relayer_field: [u8; 32], // Field element from circuit (potentially reduced mod BN254)
 ) -> Result<()> {
-    let config = &ctx.accounts.config;
+    // Verify config is the correct PDA
+    let (expected_config_pda, _) = Pubkey::find_program_address(
+        &[CONFIG_SEED],
+        ctx.program_id,
+    );
+    require!(
+        ctx.accounts.config.key() == expected_config_pda,
+        PrivacyProxyError::UnauthorizedRelayer
+    );
+    
+    // Manually deserialize only the fields we need from GlobalConfig
+    let config_data = ctx.accounts.config.try_borrow_data()?;
+    
+    // GlobalConfig layout (OLD - 434 bytes):
+    // 8: discriminator
+    // 32: admin
+    // 32: relayer_treasury
+    // 32: authorized_relayer
+    // 256: relayer_signing_key_n
+    // 4: relayer_signing_key_e
+    // 2: fee_bps (offset 364-365)
+    // 1: min_delay_hours (offset 366)
+    // 1: max_delay_hours (offset 367)
+    // 1: paused (offset 368)
+    // 1: bump (offset 369)
+    // 64: padding
+    
+    if config_data.len() < 370 {
+        return Err(PrivacyProxyError::ProtocolPaused.into());
+    }
+    
+    let fee_bps = u16::from_le_bytes([config_data[364], config_data[365]]);
+    let min_delay_hours = config_data[366];
+    let max_delay_hours = config_data[367];
+    let paused = config_data[368] != 0;
+    let is_new_layout = false; // For debugging
+    
     let pool = &mut ctx.accounts.pool;
     let pending = &mut ctx.accounts.pending_withdrawal;
 
     // Check protocol not paused
-    require!(!config.paused, PrivacyProxyError::ProtocolPaused);
+    require!(!paused, PrivacyProxyError::ProtocolPaused);
 
     // Validate bucket
     require!(
@@ -114,7 +147,7 @@ pub fn handler(
 
     // Validate delay is within bounds
     require!(
-        delay_hours >= config.min_delay_hours && delay_hours <= config.max_delay_hours,
+        delay_hours >= min_delay_hours && delay_hours <= max_delay_hours,
         PrivacyProxyError::InvalidDelayHours
     );
 
@@ -132,10 +165,14 @@ pub fn handler(
     // Calculate amounts for proof verification
     let amount = BUCKET_AMOUNTS[bucket_id as usize];
     let fee = amount
-        .checked_mul(config.fee_bps as u64)
+        .checked_mul(fee_bps as u64)
         .ok_or(PrivacyProxyError::Overflow)?
         .checked_div(10000)
         .ok_or(PrivacyProxyError::Overflow)?;
+
+    msg!("DEBUG: bucket_id={}, fee_bps={}", bucket_id, fee_bps);
+    msg!("DEBUG: amount={}, fee={}", amount, fee);
+    msg!("DEBUG: config_data.len()={}, is_new_layout={}", config_data.len(), is_new_layout);
 
     // The binding_hash is provided by the relayer (computed off-chain)
     // The ZK proof verification will fail if the binding_hash doesn't match:

@@ -7,6 +7,7 @@ use crate::state::GlobalConfig;
 pub struct UpdateConfigParams {
     pub relayer_treasury: Option<Pubkey>,
     pub authorized_relayer: Option<Pubkey>,
+    pub relayer_ecdh_pubkey: Option<[u8; 32]>, // M-08 FIX: Allow updating ECDH key
     pub fee_bps: Option<u16>,
     pub paused: Option<bool>,
 }
@@ -36,6 +37,11 @@ pub fn handler(ctx: Context<UpdateConfig>, params: UpdateConfigParams) -> Result
     if let Some(relayer) = params.authorized_relayer {
         config.authorized_relayer = relayer;
         msg!("Updated authorized_relayer to {}", relayer);
+    }
+
+    if let Some(ecdh_pubkey) = params.relayer_ecdh_pubkey {
+        config.relayer_ecdh_pubkey = ecdh_pubkey;
+        msg!("Updated relayer_ecdh_pubkey");
     }
 
     if let Some(fee) = params.fee_bps {
