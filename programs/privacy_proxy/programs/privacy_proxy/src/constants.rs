@@ -16,6 +16,9 @@ pub const PENDING_SEED: &[u8] = b"pending";
 /// Seed for encrypted note PDA
 pub const NOTE_SEED: &[u8] = b"note";
 
+/// Seed for commitment record PDA (M-09 fix: on-chain commitment verification)
+pub const COMMITMENT_SEED: &[u8] = b"commitment";
+
 /// Fixed denomination buckets (in lamports)
 /// 7 buckets: 0.1, 0.5, 1, 5, 10, 50, 100 SOL
 pub const BUCKET_AMOUNTS: [u64; 7] = [

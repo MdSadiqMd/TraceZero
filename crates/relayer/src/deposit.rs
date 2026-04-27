@@ -809,6 +809,16 @@ impl DepositService {
             &self.config.program_id,
         );
 
+        // M-09 FIX: Derive commitment_record PDA
+        let (commitment_record_pda, _) = Pubkey::find_program_address(
+            &[
+                b"commitment",
+                pool_pda.as_ref(),
+                &on_chain_next_index.to_le_bytes(),
+            ],
+            &self.config.program_id,
+        );
+
         // Build instruction data
         // deposit(bucket_id: u8, commitment: [u8; 32], token_hash: [u8; 32], encrypted_note: Vec<u8>, merkle_root: [u8; 32])
         let mut data = vec![0u8; 8]; // Anchor discriminator for "deposit"
@@ -835,6 +845,7 @@ impl DepositService {
                 AccountMeta::new(historical_roots_pda, false), // historical_roots (mut)
                 AccountMeta::new(used_token_pda, false),  // used_token (init, new format)
                 AccountMeta::new(note_pda, false),        // encrypted_note (init)
+                AccountMeta::new(commitment_record_pda, false), // M-09 FIX: commitment_record (init)
                 AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false), // system_program
             ],
             data,

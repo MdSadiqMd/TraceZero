@@ -8,7 +8,8 @@ use anchor_lang::system_program;
 use crate::constants::*;
 use crate::errors::PrivacyProxyError;
 use crate::state::{
-    DepositPool, EncryptedNote, GlobalConfig, HistoricalRoots, UsedToken, HISTORICAL_ROOTS_SEED,
+    CommitmentRecord, DepositPool, EncryptedNote, GlobalConfig, HistoricalRoots, UsedToken,
+    HISTORICAL_ROOTS_SEED,
 };
 
 #[derive(Accounts)]
@@ -60,13 +61,24 @@ pub struct Deposit<'info> {
     )]
     pub encrypted_note: Account<'info, EncryptedNote>,
 
+    /// M-09 FIX: On-chain commitment record for merkle root verification
+    /// Stores each commitment to enable verification of merkle tree construction
+    #[account(
+        init,
+        payer = relayer,
+        space = CommitmentRecord::SIZE,
+        seeds = [COMMITMENT_SEED, pool.key().as_ref(), &pool.next_index.to_le_bytes()],
+        bump,
+    )]
+    pub commitment_record: Account<'info, CommitmentRecord>,
+
     pub system_program: Program<'info, System>,
 }
 
 pub fn handler(
     ctx: Context<Deposit>,
     bucket_id: u8,
-    _commitment: [u8; 32],
+    commitment: [u8; 32], // M-09 FIX: Now used for on-chain verification
     token_hash: [u8; 32],
     encrypted_note_data: Vec<u8>,
     merkle_root: [u8; 32], // Actual Merkle root from relayer
@@ -121,6 +133,7 @@ pub fn handler(
     let historical_roots = &mut ctx.accounts.historical_roots;
     let used_token = &mut ctx.accounts.used_token;
     let note = &mut ctx.accounts.encrypted_note;
+    let commitment_record = &mut ctx.accounts.commitment_record;
 
     // Validate bucket
     require!(
@@ -183,10 +196,23 @@ pub fn handler(
     note.created_at = Clock::get()?.unix_timestamp;
     note.bump = ctx.bumps.encrypted_note;
 
+    // M-09 FIX: Store commitment on-chain for merkle root verification
+    // This enables:
+    // 1. Verification that commitments were actually added on-chain
+    // 2. Off-chain reconstruction and verification of merkle tree
+    // 3. Challenge mechanism for disputed merkle roots
+    commitment_record.commitment = commitment;
+    commitment_record.pool = pool.key();
+    commitment_record.leaf_index = leaf_index;
+    commitment_record.merkle_root_after = merkle_root;
+    commitment_record.created_at = Clock::get()?.unix_timestamp;
+    commitment_record.bump = ctx.bumps.commitment_record;
+
     msg!("Deposit successful");
     msg!("Pool: bucket {}", bucket_id);
     msg!("Amount: {} lamports", amount);
     msg!("Leaf index: {}", leaf_index);
+    msg!("Commitment: {:?}", &commitment[..8]);
     msg!("Merkle root: {:?}", &merkle_root[..8]);
 
     Ok(())

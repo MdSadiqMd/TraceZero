@@ -1,3 +1,4 @@
+pub mod commitment_record;
 pub mod deposit_pool;
 pub mod encrypted_note;
 pub mod global_config;
@@ -6,6 +7,7 @@ pub mod nullifier;
 pub mod pending_withdrawal;
 pub mod used_token;
 
+pub use commitment_record::*;
 pub use deposit_pool::*;
 pub use encrypted_note::*;
 pub use global_config::*;
