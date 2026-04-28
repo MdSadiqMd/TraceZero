@@ -5,6 +5,7 @@ pub mod global_config;
 pub mod historical_roots;
 pub mod nullifier;
 pub mod pending_withdrawal;
+pub mod root_validator;
 pub mod used_token;
 
 pub use commitment_record::*;
@@ -14,4 +15,5 @@ pub use global_config::*;
 pub use historical_roots::*;
 pub use nullifier::*;
 pub use pending_withdrawal::*;
+pub use root_validator::*;
 pub use used_token::*;

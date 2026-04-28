@@ -6,8 +6,8 @@ use anchor_lang::prelude::*;
 use crate::constants::*;
 use crate::errors::PrivacyProxyError;
 use crate::state::{
-    DepositPool, GlobalConfig, HistoricalRoots, PendingWithdrawal, WithdrawalStatus,
-    HISTORICAL_ROOTS_SEED,
+    validate_merkle_root, DepositPool, GlobalConfig, HistoricalRoots, PendingWithdrawal,
+    WithdrawalStatus, HISTORICAL_ROOTS_SEED,
 };
 
 /// Domain tag for withdrawal binding hash: "bind" as u32
@@ -157,9 +157,18 @@ pub fn handler(
         PrivacyProxyError::NullifierAlreadyUsed
     );
 
-    // Verify Merkle root is valid (current, in pool history, or in extended history)
-    let root_valid = pool.is_valid_root(&merkle_root)
-        || ctx.accounts.historical_roots.contains_root(&merkle_root);
+    // Verify Merkle root is valid across multiple historical root accounts
+    // Checks: current pool root, pool history, and up to MAX_ACCOUNTS_TO_CHECK chained accounts
+    let root_valid = validate_merkle_root(
+        &merkle_root,
+        &pool.merkle_root,
+        &pool.historical_roots,
+        &ctx.accounts.historical_roots,
+        ctx.remaining_accounts,
+        &pool.key(),
+        ctx.program_id,
+    )?;
+    
     require!(root_valid, PrivacyProxyError::InvalidMerkleRoot);
 
     // Calculate amounts for proof verification
