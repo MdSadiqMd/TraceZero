@@ -10,6 +10,7 @@
 use anchor_lang::prelude::*;
 use groth16_solana::groth16::{Groth16Verifier, Groth16Verifyingkey};
 
+use crate::point_validation::{validate_withdrawal_proof_structure, validate_ownership_proof_structure};
 use crate::verifying_key::*;
 use crate::ZkVerifierError;
 
@@ -32,6 +33,9 @@ pub fn verify_withdrawal_proof(
     proof_c: &[u8; 64],
     public_inputs: &[[u8; 32]; 7], // Now 7 inputs including binding hash
 ) -> Result<()> {
+    // Validate proof structure before verification
+    validate_withdrawal_proof_structure(proof_a, proof_b, proof_c)?;
+
     let ic_points = get_withdrawal_ic_points();
 
     // Current VK has 8 IC points for 7 public inputs
@@ -92,6 +96,9 @@ pub fn verify_ownership_proof(
     public_inputs: &[[u8; 32]; 2],
     binding_hash: &[u8; 32],
 ) -> Result<()> {
+    // Validate proof structure before verification
+    validate_ownership_proof_structure(proof_a, proof_b, proof_c)?;
+
     let ic_points = get_ownership_ic_points();
 
     // Current VK has 2 IC points (for 1 public input)

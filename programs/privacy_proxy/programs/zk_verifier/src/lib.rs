@@ -10,6 +10,7 @@
 use anchor_lang::prelude::*;
 
 pub mod groth16;
+pub mod point_validation;
 pub mod poseidon;
 pub mod verifying_key;
 
@@ -187,6 +188,9 @@ pub enum ZkVerifierError {
 
     #[msg("Invalid binding hash - proof not bound to these parameters")]
     InvalidBindingHash,
+
+    #[msg("Invalid proof structure - malformed elliptic curve points")]
+    InvalidProofStructure,
 }
 
 /// Prepare public inputs for withdrawal verification
