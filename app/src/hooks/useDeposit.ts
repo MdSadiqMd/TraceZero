@@ -190,8 +190,13 @@ export function useDeposit() {
         if (!options.skipDelay) {
           const minDelay = options.testMode ? TEST_MIN_DELAY_MS : MIN_DELAY_MS;
           const maxDelay = options.testMode ? TEST_MAX_DELAY_MS : MAX_DELAY_MS;
-          const delay =
-            Math.floor(Math.random() * (maxDelay - minDelay)) + minDelay;
+          
+          // Use crypto.getRandomValues() instead of Math.random()
+          // for cryptographically secure random delays
+          const randomArray = new Uint32Array(1);
+          crypto.getRandomValues(randomArray);
+          const randomFloat = randomArray[0] / 0xffffffff; // Convert to 0-1 range
+          const delay = Math.floor(randomFloat * (maxDelay - minDelay)) + minDelay;
 
           setState((s) => ({
             ...s,

@@ -188,10 +188,11 @@ pub async fn run(state: Arc<RelayerState>) -> anyhow::Result<()> {
     Ok(())
 }
 
+// L-03 FIX: Remove version information to prevent fingerprinting
 #[derive(Serialize)]
 struct HealthResponse {
     status: &'static str,
-    version: &'static str,
+    // version field removed - aids fingerprinting
     merkle_sync: MerkleSyncHealth,
 }
 
@@ -327,7 +328,7 @@ async fn health(State(state): State<Arc<RelayerState>>) -> Json<HealthResponse> 
     
     Json(HealthResponse {
         status,
-        version: env!("CARGO_PKG_VERSION"),
+        // version field removed (L-03 fix)
         merkle_sync: MerkleSyncHealth {
             all_synced,
             buckets,

@@ -243,6 +243,62 @@ impl DepositService {
         pool_pda
     }
 
+    /// Check if a deposit with this commitment already exists on-chain
+    /// Returns the existing deposit response if found (for idempotency)
+    async fn check_existing_deposit(
+        &self,
+        bucket_id: u8,
+        commitment: &[u8; 32],
+        token_hash: &[u8; 32],
+    ) -> Result<Option<DepositResponse>> {
+        // Check if UsedToken PDA exists on-chain
+        let (used_token_pda, _) = Pubkey::find_program_address(
+            &[b"used_token", &[bucket_id], token_hash],
+            &self.config.program_id,
+        );
+
+        let account = self.rpc_client.get_account(&used_token_pda).await;
+        
+        if account.is_err() {
+            // Account doesn't exist - this is a new deposit
+            return Ok(None);
+        }
+
+        // Token was already redeemed - check if commitment exists in tree
+        // Get all commitments from the local merkle tree
+        let commitments = self.merkle_service.get_commitments(bucket_id).await?;
+        
+        for (leaf_index, leaf_commitment) in commitments.iter().enumerate() {
+            if leaf_commitment == commitment {
+                // Found the commitment - return existing deposit info
+                let merkle_root = self.merkle_service.root(bucket_id).await?;
+                
+                info!(
+                    "Found existing deposit (idempotent retry): bucket={}, leaf_index={}, commitment={}",
+                    bucket_id, leaf_index, hex::encode(commitment)
+                );
+                
+                return Ok(Some(DepositResponse {
+                    success: true,
+                    tx_signature: None, // We don't store the original tx signature
+                    leaf_index: Some(leaf_index as u64),
+                    merkle_root: Some(hex::encode(merkle_root)),
+                    error: None,
+                }));
+            }
+        }
+
+        // Token redeemed but commitment not found - this shouldn't happen
+        // but could occur if local tree is out of sync
+        warn!(
+            "Token redeemed but commitment not found in tree: bucket={}, token_hash={}",
+            bucket_id, hex::encode(token_hash)
+        );
+        
+        // Return error to prevent double-spend
+        Err(RelayerError::TokenAlreadyRedeemed)
+    }
+
     pub async fn handle_deposit(&self, request: DepositRequest) -> Result<DepositResponse> {
         // 1. Verify the signed credit
         self.verify_credit(&request.credit).await?;
@@ -251,12 +307,22 @@ impl DepositService {
         let bucket_id = get_bucket_id(request.credit.amount)
             .ok_or(RelayerError::InvalidBucket(request.credit.amount))?;
 
-        // 3. H-05 FIX: Check relayer balance BEFORE reserving token
+        // 3. Check if this commitment already exists on-chain (idempotency)
+        // This handles the case where a previous request timed out but succeeded
+        let token_hash = hash_token_id(&request.credit.token_id);
+        if let Some(existing) = self.check_existing_deposit(bucket_id, &request.commitment, &token_hash).await? {
+            info!(
+                "Deposit already exists (idempotent retry): bucket={}, leaf_index={:?}",
+                bucket_id, existing.leaf_index
+            );
+            return Ok(existing);
+        }
+
+        // 4. Check relayer balance BEFORE reserving token
         // This prevents burning tokens when relayer is insolvent
         self.check_relayer_balance(bucket_id).await?;
 
-        // 4. Atomically check and reserve token (prevents TOCTOU race)
-        let token_hash = hash_token_id(&request.credit.token_id);
+        // 5. Atomically check and reserve token (prevents TOCTOU race)
         let reserved = {
             let mut store = self.token_store.write().await;
             store.try_reserve(token_hash)

@@ -10,9 +10,26 @@ export const BUCKET_AMOUNTS = [
 ] as const;
 
 export const RELAYER_FEE_PERCENT = 0.5; // 0.5%
-export const TOR_GATEWAY_URL = "http://localhost:3080";
-export const RELAYER_URL = "http://localhost:8080";
-export const SOLANA_RPC_URL = "https://api.devnet.solana.com";
+
+// Make URLs configurable via environment variables
+// This prevents hardcoded values and allows Tor routing for RPC
+export const TOR_GATEWAY_URL = 
+  typeof window !== 'undefined' && (window as any).__TOR_GATEWAY_URL__ 
+    ? (window as any).__TOR_GATEWAY_URL__ 
+    : import.meta.env.VITE_TOR_GATEWAY_URL || "http://localhost:3080";
+
+export const RELAYER_URL = 
+  typeof window !== 'undefined' && (window as any).__RELAYER_URL__ 
+    ? (window as any).__RELAYER_URL__ 
+    : import.meta.env.VITE_RELAYER_URL || "http://localhost:8080";
+
+export const SOLANA_RPC_URL = 
+  typeof window !== 'undefined' && (window as any).__SOLANA_RPC_URL__ 
+    ? (window as any).__SOLANA_RPC_URL__ 
+    : import.meta.env.VITE_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+
+// Note: For production, SOLANA_RPC_URL should be routed through Tor gateway
+// to prevent DNS leaks. Example: http://localhost:3080/rpc (proxied to Solana RPC)
 
 // Domain tags for Poseidon hashes (MUST match circuits/*.circom and SDK)
 export const DOMAIN_NULLIFIER = 1853189228n; // "null" as u32
