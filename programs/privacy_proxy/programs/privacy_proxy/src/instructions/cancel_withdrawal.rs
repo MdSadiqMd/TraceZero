@@ -5,7 +5,7 @@ use anchor_lang::prelude::*;
 
 use crate::constants::*;
 use crate::errors::PrivacyProxyError;
-use crate::state::{GlobalConfig, PendingWithdrawal, WithdrawalStatus};
+use crate::state::{DepositPool, GlobalConfig, PendingWithdrawal, WithdrawalStatus};
 
 pub mod zk_verifier {
     use super::*;
@@ -20,6 +20,13 @@ pub struct CancelWithdrawal<'info> {
     /// Global config - we only read paused
     /// CHECK: We manually verify this is the correct config PDA in the handler
     pub config: UncheckedAccount<'info>,
+
+    /// Deposit pool - needed to restore anonymity set size (M-14 fix)
+    #[account(
+        mut,
+        constraint = pool.key() == pending_withdrawal.pool @ PrivacyProxyError::InvalidBucketId,
+    )]
+    pub pool: Account<'info, DepositPool>,
 
     #[account(
         mut,
@@ -90,12 +97,22 @@ pub fn handler(
         &binding_hash,
     )?;
 
+    // Restore anonymity set size when withdrawal is cancelled
+    // When a withdrawal is requested, the anonymity set is decremented because
+    // that deposit is "locked" for withdrawal. If cancelled, we restore it.
+    let pool = &mut ctx.accounts.pool;
+    pool.anonymity_set_size = pool
+        .anonymity_set_size
+        .checked_add(1)
+        .ok_or(PrivacyProxyError::Overflow)?;
+
     pending.status = WithdrawalStatus::Cancelled;
 
     msg!("Withdrawal cancelled");
     msg!("TX ID: {}", pending.tx_id);
     msg!("Binding hash verified: {:?}", &binding_hash[..8]);
     msg!("Nullifier can be reused for new withdrawal");
+    msg!("Anonymity set restored: {}", pool.anonymity_set_size);
 
     Ok(())
 }

@@ -208,6 +208,11 @@ pub fn handler(
 
     let withdrawal_amount = amount.checked_sub(fee).ok_or(PrivacyProxyError::Overflow)?;
 
+    // M-14 FIX: Decrement anonymity set size when withdrawal is requested
+    // This deposit is now "locked" for withdrawal and shouldn't count toward anonymity
+    // If the withdrawal is cancelled, this will be restored in cancel_withdrawal
+    pool.anonymity_set_size = pool.anonymity_set_size.saturating_sub(1);
+
     // Calculate execute_after timestamp
     let clock = Clock::get()?;
     let delay_seconds = (delay_hours as i64) * 3600;

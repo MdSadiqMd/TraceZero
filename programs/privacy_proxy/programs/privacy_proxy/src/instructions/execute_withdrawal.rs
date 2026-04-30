@@ -181,8 +181,8 @@ pub fn handler(ctx: Context<ExecuteWithdrawal>) -> Result<()> {
     **recipient_info.try_borrow_mut_lamports()? = new_recipient_balance;
     **treasury_info.try_borrow_mut_lamports()? = new_treasury_balance;
 
-    // Update pool anonymity set
-    pool.anonymity_set_size = pool.anonymity_set_size.saturating_sub(1);
+    // Note: anonymity_set_size was already decremented in request_withdrawal
+    // We don't decrement it again here
 
     // Mark nullifier as spent
     nullifier.nullifier_hash = pending.nullifier_hash;
