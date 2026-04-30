@@ -52,4 +52,7 @@ pub enum PrivacyProxyError {
 
     #[msg("Invalid binding hash - proof not bound to these parameters")]
     InvalidBindingHash,
+
+    #[msg("Invalid recipient address - field element cannot be used as Solana address")]
+    InvalidRecipient,
 }

@@ -7,6 +7,7 @@ use crate::errors::PrivacyProxyError;
 use crate::state::{
     DepositPool, GlobalConfig, NullifierRecord, PendingWithdrawal, WithdrawalStatus,
 };
+use crate::utils::validate_recipient_can_receive;
 
 #[derive(Accounts)]
 pub struct ExecuteWithdrawal<'info> {
@@ -114,6 +115,10 @@ pub fn handler(ctx: Context<ExecuteWithdrawal>) -> Result<()> {
         clock.unix_timestamp >= pending.execute_after,
         PrivacyProxyError::TimelockNotExpired
     );
+
+    // M-13 FIX: Validate recipient can receive lamports
+    // This ensures funds won't be lost to an invalid or executable account
+    validate_recipient_can_receive(&ctx.accounts.recipient, pending.amount)?;
 
     // Transfer funds from pool to recipient
     let pool_lamports = pool.to_account_info().lamports();

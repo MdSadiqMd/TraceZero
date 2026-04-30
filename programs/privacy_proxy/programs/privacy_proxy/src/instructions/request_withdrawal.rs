@@ -9,6 +9,7 @@ use crate::state::{
     validate_merkle_root, DepositPool, GlobalConfig, HistoricalRoots, PendingWithdrawal,
     WithdrawalStatus, HISTORICAL_ROOTS_SEED,
 };
+use crate::utils::validate_recipient_field_element;
 
 /// Domain tag for withdrawal binding hash: "bind" as u32
 /// MUST match: circuits/withdrawal.circom
@@ -216,10 +217,9 @@ pub fn handler(
         .ok_or(PrivacyProxyError::Overflow)?;
 
     // Create pending withdrawal
-    // Convert recipient field element back to Pubkey for storage
-    // Note: If the recipient was reduced mod BN254, this may not be a valid Pubkey
-    // In practice, stealth addresses should be chosen to be valid field elements
-    let recipient_pubkey = Pubkey::new_from_array(recipient);
+    // M-13 FIX: Validate recipient field element before converting to Pubkey
+    // This ensures the field element is in valid range and can be used as an address
+    let recipient_pubkey = validate_recipient_field_element(&recipient)?;
 
     pending.tx_id = pool.total_deposits; // Use as unique ID
     pending.pool = pool.key();
