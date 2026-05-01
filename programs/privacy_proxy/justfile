@@ -1,0 +1,94 @@
+# L-06 FIX: Automated build with IDL verification using Just
+# Just is a modern command runner (https://github.com/casey/just)
+
+# Default recipe (runs when you just type 'just')
+default: build
+
+# Build programs with IDL verification
+build:
+    @echo "Building Anchor programs..."
+    anchor build
+    @echo "Fixing IDL addresses..."
+    @bash scripts/fix-idl.sh
+    @echo "Verifying IDL addresses..."
+    @bash scripts/verify-idl.sh
+    @echo "✓ Build complete with verified IDLs"
+
+# Fix IDL addresses (run after anchor build)
+fix-idl:
+    @echo "Fixing IDL addresses..."
+    @bash scripts/fix-idl.sh
+
+# Verify IDL addresses are correct
+verify-idl:
+    @echo "Verifying IDL addresses..."
+    @bash scripts/verify-idl.sh
+
+# Clean build artifacts
+clean:
+    @echo "Cleaning build artifacts..."
+    anchor clean
+    rm -rf target/
+
+# Run tests
+test: build
+    @echo "Running tests..."
+    anchor test --skip-local-validator
+
+# Deploy to devnet
+deploy-devnet: build
+    @echo "Deploying to devnet..."
+    anchor deploy --provider.cluster devnet
+    @echo "Verifying deployment..."
+    @bash scripts/verify-idl.sh
+
+# Deploy to mainnet (requires confirmation)
+deploy-mainnet: build
+    @echo "⚠️  WARNING: Deploying to MAINNET"
+    @echo "Are you sure? (Press Ctrl+C to cancel, Enter to continue)"
+    @read
+    anchor deploy --provider.cluster mainnet
+    @echo "Verifying deployment..."
+    @bash scripts/verify-idl.sh
+
+# CI build (strict mode)
+ci-build:
+    @echo "CI Build: Building with strict verification..."
+    anchor build
+    @bash scripts/fix-idl.sh
+    @bash scripts/verify-idl.sh || (echo "❌ IDL verification failed in CI" && exit 1)
+    @echo "✓ CI build passed"
+
+# Watch mode - rebuild on file changes
+watch:
+    @echo "Watching for changes..."
+    watchexec -e rs,toml -w programs -w Cargo.toml -- just build
+
+# Format code
+fmt:
+    @echo "Formatting Rust code..."
+    cargo fmt --all
+
+# Lint code
+lint:
+    @echo "Linting Rust code..."
+    cargo clippy --all-targets --all-features -- -D warnings
+
+# Check code without building
+check:
+    @echo "Checking code..."
+    cargo check --all-targets --all-features
+
+# Full check: format, lint, build, test
+full-check: fmt lint build test
+    @echo "✓ Full check passed"
+
+# Show program addresses
+show-addresses:
+    @echo "Program Addresses:"
+    @echo "  Privacy Proxy: Dzpj74oeEhpyXwaiLUFKgzVz1Dcj4ZobsoczYdHiMaB3"
+    @echo "  ZK Verifier:   2ntZ79MomBLsLyaExjGW6F7kkYtmprhdzZzQaMXSMZRu"
+
+# List all available recipes
+list:
+    @just --list
