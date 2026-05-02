@@ -164,13 +164,6 @@ sequenceDiagram
     end
 ```
 
-**Security Fixes Applied**: 40 fixes across all phases
-- **Critical (C01-C05)**: Encryption, nullifier tracking, commitment tracking, proof verification, RSA auth
-- **High (H01-H11)**: TOCTOU, race conditions, payment verification, rate limiting, insolvency checks, Tor security
-- **Medium (M01-M14)**: Blind sig verification, field reduction, Poseidon consistency, token replay, ECDH security, merkle verification, atomic transfers, multi-account roots, proof validation, recipient validation, anonymity metrics
-- **Low (L02-L09)**: Configurable URLs, no version exposure, secure random, IDL automation, health checks, domain tags
-- **Advisory (A03)**: Claim privacy documented with user guide
-
 ### On-Chain Trace Analysis (Updated with Security Fixes)
 
 ```mermaid
@@ -223,15 +216,6 @@ flowchart LR
     style Dest fill:#2c3e50,color:#fff
 ```
 
-**Security Layers**:
-- 🔒 **Cryptographic Unlinkability**: Blind signatures + ZK proofs + stealth addresses
-- 🔒 **Network Anonymity**: Tor with circuit isolation, multi-gateway, E2E encryption
-- 🔒 **On-Chain Protection**: Nullifier tracking, commitment tracking, proof verification
-- 🔒 **Data Protection**: AES-256-GCM encryption, secure random, field validation
-- 🔒 **Operational Security**: Rate limiting, balance checks, idempotency, health monitoring
-
-**Attack Surface**: 48 vectors mitigated, 40 security fixes applied, 8 layers of defense-in-depth
-
 **What Blockchain Explorers See**:
 1. TX1: User paid treasury (looks like any service payment)
 2. TX2: Deposit wallet deposited to pool (no user link, different wallet)
@@ -279,20 +263,6 @@ TraceZero implements secure key management practices:
 - **Treasury Keypair**: Stored in `~/.config/tracezero/treasury.json` outside project directory with `600` permissions
 - **Automatic Permission Setting**: Keys are automatically created with secure permissions
 - **Minimal Logging**: Key paths are logged at debug level only, not in production logs
-
-### Security Audit
-A comprehensive security audit has been conducted. All critical issues have been addressed:
-- ✅ **C-04**: RSA key duplication eliminated, permissions secured
-- ✅ **C-05**: Treasury moved to secure location, permissions secured  
-- ✅ **C-06**: Key path logging reduced to debug level
-
-### Production Recommendations
-For production deployments:
-- Use HSM or cloud KMS for RSA key storage
-- Use hardware wallet or multisig for treasury operations
-- Set `RUST_LOG=info` (not debug) to prevent key path logging
-- Implement key rotation strategy
-- Monitor access to cryptographic material
 
 ### Verification
 Run the security test suite:
