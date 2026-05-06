@@ -113,7 +113,7 @@ function Home() {
                   <WalletMultiButton />
                 )}
                 <a
-                  href="https://github.com/privacy-proxy"
+                  href="https://github.com/MdSadiqMd/TraceZero/tree/main/docs"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="border-2 border-white/20 hover:border-lime px-6 py-3 font-mono font-bold text-center transition-all duration-200 hover:bg-lime hover:text-black"
