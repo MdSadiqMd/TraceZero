@@ -1,0 +1,38 @@
+## TraceZero Production Tor Configuration
+## Used by: crates/network/Dockerfile in docker-compose.prod.yml
+
+# Data & Logging
+DataDirectory /var/lib/tor
+Log notice stdout
+SafeLogging 1
+
+# Hidden Service
+# External: <onion-addr>.onion:8080
+# Internal: relayer container port 8080 (Docker internal DNS: relayer)
+HiddenServiceDir /var/lib/tor/hidden_service/
+HiddenServicePort 8080 relayer:8080
+HiddenServiceVersion 3
+
+# SOCKS5 Proxy (for relayer outbound + tor-gateway)
+# Bind to all interfaces inside the Docker network so both
+# tor-privoxy and tor-gateway can connect.
+SocksPort 0.0.0.0:9050
+# Only allow connections from within the tracezero Docker network
+SocksPolicy accept 172.30.0.0/24
+SocksPolicy reject *
+
+# Performance
+NumEntryGuards 4
+CircuitBuildTimeout 30
+LearnCircuitBuildTimeout 1
+MaxCircuitDirtiness 600
+MaxClientCircuitsPending 64
+
+# Security
+# Disable control port (no external circuit manipulation)
+ControlPort 0
+CookieAuthentication 0
+# Disable transparent proxy and DNS (not needed)
+TransPort 0
+DNSPort 0
+ConnLimit 1000
