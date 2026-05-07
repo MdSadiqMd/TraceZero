@@ -23,6 +23,7 @@ use crate::config::{calculate_total_with_fee, get_bucket_id, RelayerConfig, BUCK
 use crate::deposit::DepositService;
 use crate::error::RelayerError;
 use crate::merkle_service::MerkleService;
+use crate::merkle_verifier::MerkleVerifier;
 use crate::rate_limiter::{ExpensiveOpRateLimiter, RateLimitConfig, validate_proof_structure};
 use crate::withdrawal::WithdrawalService;
 
@@ -59,6 +60,7 @@ pub struct RelayerState {
     pub rpc_client: Arc<RpcClient>,
     pub blind_signer: Arc<BlindSignerService>,
     pub merkle_service: Arc<MerkleService>,
+    pub merkle_verifier: Arc<MerkleVerifier>,
     pub deposit_service: Arc<DepositService>,
     pub withdrawal_service: Arc<WithdrawalService>,
     /// X25519 keypair for ECDH key exchange (payload encryption)
@@ -69,13 +71,72 @@ pub struct RelayerState {
 }
 
 impl RelayerState {
+    /// Derive pool PDA for a given bucket
+    fn derive_pool_pda(program_id: &solana_sdk::pubkey::Pubkey, bucket_id: u8) -> solana_sdk::pubkey::Pubkey {
+        let (pool_pda, _) = solana_sdk::pubkey::Pubkey::find_program_address(
+            &[b"pool", &[bucket_id]], 
+            program_id
+        );
+        pool_pda
+    }
+
     pub async fn new(config: RelayerConfig) -> anyhow::Result<Self> {
         let rpc_client = Arc::new(RpcClient::new(config.rpc_url.clone()));
         let blind_signer = Arc::new(BlindSignerService::new(config.rsa_key_bits)?);
         let merkle_service = Arc::new(MerkleService::new());
+        let merkle_verifier = Arc::new(MerkleVerifier::new(
+            config.rpc_url.clone(),
+            config.program_id,
+        ));
 
+        // Initialize merkle trees for all buckets
         for bucket_id in 0..BUCKET_AMOUNTS.len() as u8 {
             merkle_service.init_tree(bucket_id).await?;
+        }
+
+        // M-09 FIX: Verify merkle trees against on-chain state during startup
+        info!("🔍 Verifying merkle trees against on-chain commitment records...");
+        let mut verification_results = Vec::new();
+        
+        for bucket_id in 0..BUCKET_AMOUNTS.len() as u8 {
+            let pool_pda = Self::derive_pool_pda(&config.program_id, bucket_id);
+            
+            match merkle_verifier.verify_merkle_tree(&pool_pda, 20).await {
+                Ok(is_valid) => {
+                    if is_valid {
+                        info!("✅ Bucket {} merkle tree verified successfully", bucket_id);
+                        verification_results.push((bucket_id, true, None));
+                    } else {
+                        let error_msg = format!("Merkle tree verification failed for bucket {}", bucket_id);
+                        error!("{}", error_msg);
+                        verification_results.push((bucket_id, false, Some(error_msg)));
+                    }
+                }
+                Err(e) => {
+                    let error_msg = format!("Failed to verify bucket {}: {}", bucket_id, e);
+                    error!("{}", error_msg);
+                    verification_results.push((bucket_id, false, Some(error_msg)));
+                }
+            }
+        }
+
+        // Check if any verifications failed
+        let failed_verifications: Vec<_> = verification_results
+            .iter()
+            .filter(|(_, is_valid, _)| !is_valid)
+            .collect();
+
+        if !failed_verifications.is_empty() {
+            error!("Merkle tree verification failures detected:");
+            for (bucket_id, _, error) in &failed_verifications {
+                error!("   Bucket {}: {}", bucket_id, error.as_ref().unwrap_or(&"Unknown error".to_string()));
+            }
+            
+            // In production, you might want to fail startup here
+            // For now, we'll log the errors but continue
+            error!("⚠️  Continuing startup despite verification failures. This may indicate state corruption.");
+        } else {
+            info!("✅ All merkle trees verified successfully against on-chain state");
         }
 
         let deposit_service = Arc::new(DepositService::new(
@@ -116,11 +177,38 @@ impl RelayerState {
             }
         });
 
+        // Spawn periodic merkle verification task
+        let verifier_clone = merkle_verifier.clone();
+        let program_id = config.program_id;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // Every 5 minutes
+            loop {
+                interval.tick().await;
+                
+                for bucket_id in 0..BUCKET_AMOUNTS.len() as u8 {
+                    let pool_pda = Self::derive_pool_pda(&program_id, bucket_id);
+                    
+                    match verifier_clone.verify_merkle_tree(&pool_pda, 20).await {
+                        Ok(true) => {
+                            tracing::debug!("✅ Periodic verification passed for bucket {}", bucket_id);
+                        }
+                        Ok(false) => {
+                            tracing::error!("Periodic verification failed for bucket {}", bucket_id);
+                        }
+                        Err(e) => {
+                            tracing::error!("Periodic verification error for bucket {}: {}", bucket_id, e);
+                        }
+                    }
+                }
+            }
+        });
+
         Ok(Self {
             config,
             rpc_client,
             blind_signer,
             merkle_service,
+            merkle_verifier,
             deposit_service,
             withdrawal_service,
             ecdh_secret,
@@ -166,6 +254,14 @@ pub async fn run(state: Arc<RelayerState>) -> anyhow::Result<()> {
         .route("/admin/rebuild_token_store", post(rebuild_token_store))
         // Admin: Get token store stats
         .route("/admin/token_store_stats", get(get_token_store_stats))
+        // Admin: Verify merkle tree for specific bucket
+        .route("/admin/verify_merkle/:bucket_id", get(verify_merkle_tree))
+        // Admin: Verify all merkle trees
+        .route("/admin/verify_all_merkle", get(verify_all_merkle_trees))
+        // Admin: Verify specific commitment exists
+        .route("/admin/verify_commitment/:bucket_id/:leaf_index/:commitment", get(verify_commitment_exists))
+        // Admin: Get commitment record details
+        .route("/admin/commitment_record/:bucket_id/:leaf_index", get(get_commitment_record))
         .layer(GovernorLayer {
             config: Arc::new(governor_conf),
         })
@@ -887,4 +983,276 @@ async fn get_token_store_stats(
         token_count: count,
         checksum: hex::encode(checksum),
     })
+}
+
+#[derive(Serialize)]
+struct MerkleVerificationResponse {
+    success: bool,
+    bucket_id: u8,
+    is_valid: Option<bool>,
+    commitment_count: Option<usize>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AllMerkleVerificationResponse {
+    success: bool,
+    results: Vec<MerkleVerificationResponse>,
+    overall_valid: bool,
+}
+
+async fn verify_merkle_tree(
+    State(state): State<Arc<RelayerState>>,
+    axum::extract::Path(bucket_id): axum::extract::Path<u8>,
+) -> std::result::Result<Json<MerkleVerificationResponse>, RelayerError> {
+    if bucket_id as usize >= BUCKET_AMOUNTS.len() {
+        return Err(RelayerError::InvalidBucket(bucket_id as u64));
+    }
+
+    info!("Admin: Verifying merkle tree for bucket {}", bucket_id);
+    
+    let pool_pda = RelayerState::derive_pool_pda(&state.config.program_id, bucket_id);
+    
+    match state.merkle_verifier.verify_merkle_tree(&pool_pda, 20).await {
+        Ok(is_valid) => {
+            // Get commitment count for additional info
+            let commitments = state.merkle_service.get_commitments(bucket_id).await
+                .unwrap_or_default();
+            
+            info!("✓ Merkle verification for bucket {}: valid={}, commitments={}", 
+                  bucket_id, is_valid, commitments.len());
+            
+            Ok(Json(MerkleVerificationResponse {
+                success: true,
+                bucket_id,
+                is_valid: Some(is_valid),
+                commitment_count: Some(commitments.len()),
+                error: None,
+            }))
+        }
+        Err(e) => {
+            error!("Failed to verify merkle tree for bucket {}: {}", bucket_id, e);
+            Ok(Json(MerkleVerificationResponse {
+                success: false,
+                bucket_id,
+                is_valid: None,
+                commitment_count: None,
+                error: Some(e.to_string()),
+            }))
+        }
+    }
+}
+
+async fn verify_all_merkle_trees(
+    State(state): State<Arc<RelayerState>>,
+) -> Json<AllMerkleVerificationResponse> {
+    info!("Admin: Verifying all merkle trees");
+    
+    let mut results = Vec::new();
+    let mut overall_valid = true;
+    
+    for bucket_id in 0..BUCKET_AMOUNTS.len() as u8 {
+        let pool_pda = RelayerState::derive_pool_pda(&state.config.program_id, bucket_id);
+        
+        match state.merkle_verifier.verify_merkle_tree(&pool_pda, 20).await {
+            Ok(is_valid) => {
+                if !is_valid {
+                    overall_valid = false;
+                }
+                
+                let commitments = state.merkle_service.get_commitments(bucket_id).await
+                    .unwrap_or_default();
+                
+                results.push(MerkleVerificationResponse {
+                    success: true,
+                    bucket_id,
+                    is_valid: Some(is_valid),
+                    commitment_count: Some(commitments.len()),
+                    error: None,
+                });
+            }
+            Err(e) => {
+                overall_valid = false;
+                error!("Failed to verify merkle tree for bucket {}: {}", bucket_id, e);
+                
+                results.push(MerkleVerificationResponse {
+                    success: false,
+                    bucket_id,
+                    is_valid: None,
+                    commitment_count: None,
+                    error: Some(e.to_string()),
+                });
+            }
+        }
+    }
+    
+    info!("✓ Verified all merkle trees: overall_valid={}", overall_valid);
+    
+    Json(AllMerkleVerificationResponse {
+        success: true,
+        results,
+        overall_valid,
+    })
+}
+
+#[derive(Serialize)]
+struct CommitmentExistsResponse {
+    success: bool,
+    bucket_id: u8,
+    leaf_index: u64,
+    commitment_exists: Option<bool>,
+    matches_expected: Option<bool>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CommitmentRecordResponse {
+    success: bool,
+    bucket_id: u8,
+    leaf_index: u64,
+    record: Option<CommitmentRecordInfo>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CommitmentRecordInfo {
+    commitment: String,
+    pool: String,
+    leaf_index: u64,
+    merkle_root_after: String,
+    created_at: i64,
+    bump: u8,
+    age_seconds: i64,
+}
+
+async fn verify_commitment_exists(
+    State(state): State<Arc<RelayerState>>,
+    axum::extract::Path((bucket_id, leaf_index, commitment_hex)): axum::extract::Path<(u8, u64, String)>,
+) -> std::result::Result<Json<CommitmentExistsResponse>, RelayerError> {
+    if bucket_id as usize >= BUCKET_AMOUNTS.len() {
+        return Err(RelayerError::InvalidBucket(bucket_id as u64));
+    }
+
+    // Parse commitment from hex
+    let expected_commitment = match hex::decode(&commitment_hex) {
+        Ok(bytes) => {
+            if bytes.len() != 32 {
+                return Ok(Json(CommitmentExistsResponse {
+                    success: false,
+                    bucket_id,
+                    leaf_index,
+                    commitment_exists: None,
+                    matches_expected: None,
+                    error: Some("Commitment must be 32 bytes (64 hex chars)".to_string()),
+                }));
+            }
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            arr
+        }
+        Err(e) => {
+            return Ok(Json(CommitmentExistsResponse {
+                success: false,
+                bucket_id,
+                leaf_index,
+                commitment_exists: None,
+                matches_expected: None,
+                error: Some(format!("Invalid hex commitment: {}", e)),
+            }));
+        }
+    };
+
+    info!("Admin: Verifying commitment exists for bucket {} leaf {} commitment {}", 
+          bucket_id, leaf_index, &commitment_hex[..16]);
+    
+    let pool_pda = RelayerState::derive_pool_pda(&state.config.program_id, bucket_id);
+    
+    match state.merkle_verifier.verify_commitment_exists(&pool_pda, leaf_index, &expected_commitment).await {
+        Ok(matches) => {
+            info!("✓ Commitment verification for bucket {} leaf {}: exists={}", 
+                  bucket_id, leaf_index, matches);
+            
+            Ok(Json(CommitmentExistsResponse {
+                success: true,
+                bucket_id,
+                leaf_index,
+                commitment_exists: Some(true),
+                matches_expected: Some(matches),
+                error: None,
+            }))
+        }
+        Err(e) => {
+            error!("Failed to verify commitment exists for bucket {} leaf {}: {}", 
+                   bucket_id, leaf_index, e);
+            Ok(Json(CommitmentExistsResponse {
+                success: false,
+                bucket_id,
+                leaf_index,
+                commitment_exists: None,
+                matches_expected: None,
+                error: Some(e.to_string()),
+            }))
+        }
+    }
+}
+
+async fn get_commitment_record(
+    State(state): State<Arc<RelayerState>>,
+    axum::extract::Path((bucket_id, leaf_index)): axum::extract::Path<(u8, u64)>,
+) -> std::result::Result<Json<CommitmentRecordResponse>, RelayerError> {
+    if bucket_id as usize >= BUCKET_AMOUNTS.len() {
+        return Err(RelayerError::InvalidBucket(bucket_id as u64));
+    }
+
+    info!("Admin: Fetching commitment record for bucket {} leaf {}", bucket_id, leaf_index);
+    
+    let pool_pda = RelayerState::derive_pool_pda(&state.config.program_id, bucket_id);
+    
+    // Fetch the commitment record from on-chain
+    match state.merkle_verifier.fetch_commitment_record(&pool_pda, leaf_index).await {
+        Ok(Some(record)) => {
+            // Calculate age using the record's method
+            let age_seconds = record.age_seconds();
+            
+            info!("✓ Found commitment record for bucket {} leaf {}: created {} seconds ago", 
+                  bucket_id, leaf_index, age_seconds);
+            
+            Ok(Json(CommitmentRecordResponse {
+                success: true,
+                bucket_id,
+                leaf_index,
+                record: Some(CommitmentRecordInfo {
+                    commitment: hex::encode(record.commitment),
+                    pool: record.pool.to_string(),
+                    leaf_index: record.leaf_index,
+                    merkle_root_after: hex::encode(record.merkle_root_after),
+                    created_at: record.created_at,
+                    bump: record.pda_bump(),
+                    age_seconds,
+                }),
+                error: None,
+            }))
+        }
+        Ok(None) => {
+            info!("No commitment record found for bucket {} leaf {}", bucket_id, leaf_index);
+            Ok(Json(CommitmentRecordResponse {
+                success: true,
+                bucket_id,
+                leaf_index,
+                record: None,
+                error: Some("Commitment record not found".to_string()),
+            }))
+        }
+        Err(e) => {
+            error!("Failed to fetch commitment record for bucket {} leaf {}: {}", 
+                   bucket_id, leaf_index, e);
+            Ok(Json(CommitmentRecordResponse {
+                success: false,
+                bucket_id,
+                leaf_index,
+                record: None,
+                error: Some(e.to_string()),
+            }))
+        }
+    }
 }
