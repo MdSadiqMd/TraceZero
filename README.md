@@ -237,6 +237,7 @@ flowchart LR
 | RSA-2048 Blind Signatures (RFC 9474) | Cryptographic unlinkability between credit payment and token redemption | Phase 1 → Phase 2 boundary |
 | Poseidon Hash (domain-separated) | ZK-friendly commitment: `H(DOMAIN, nullifier, secret, amount)` | Commitment, nullifier hash, binding hash, Merkle tree |
 | Groth16 ZK-SNARK (Circom, depth-20 Merkle) | Prove Merkle membership without revealing leaf index or commitment | Withdrawal proof (~200k CU on-chain verification) |
+| Merkle Tree Verification (Trustless) | Allow users to independently verify relayer's merkle tree construction | Admin endpoints + periodic background verification |
 | Nullifier Registry (on-chain PDA) | Prevent double-spend without revealing which deposit was consumed | Withdrawal execution |
 | Binding Hash (Poseidon public output) | Cryptographically bind proof to specific recipient, relayer, and fee | Prevents proof front-running and parameter substitution |
 | X25519 ECDH + Ed25519 Stealth Addresses | One-time unlinkable recipient addresses (BN254 field-compatible) | Withdrawal recipient generation |
@@ -254,15 +255,6 @@ flowchart LR
 - **Network Privacy**: Tor (Docker)
 - **Frontend**: TanStack Start + React
 - **Backend**: Rust (Axum)
-
-## Security
-
-### Key Management
-TraceZero implements secure key management practices:
-- **RSA Private Key**: Stored in `crates/relayer/rsa_signing_key.der` with `600` permissions (owner read/write only)
-- **Treasury Keypair**: Stored in `~/.config/tracezero/treasury.json` outside project directory with `600` permissions
-- **Automatic Permission Setting**: Keys are automatically created with secure permissions
-- **Minimal Logging**: Key paths are logged at debug level only, not in production logs
 
 ### Verification
 Run the security test suite:
