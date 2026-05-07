@@ -1,5 +1,5 @@
 /// Off-chain merkle tree verification against on-chain commitment records
-/// M-09 FIX: Enables trustless verification of relayer's merkle tree construction
+///  Enables trustless verification of relayer's merkle tree construction
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::commitment_config::CommitmentConfig;
 use solana_sdk::pubkey::Pubkey;
@@ -19,6 +19,25 @@ pub struct CommitmentRecord {
 }
 
 impl CommitmentRecord {
+    /// Get the age of this commitment record in seconds
+    pub fn age_seconds(&self) -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            - self.created_at
+    }
+
+    /// Validate that this record belongs to the expected pool
+    pub fn validate_pool(&self, expected_pool: &Pubkey) -> bool {
+        &self.pool == expected_pool
+    }
+
+    /// Get the PDA bump seed
+    pub fn pda_bump(&self) -> u8 {
+        self.bump
+    }
+
     /// Deserialize from account data
     pub fn try_from_slice(data: &[u8]) -> Result<Self> {
         if data.len() < 8 + 32 + 32 + 8 + 32 + 8 + 1 {
@@ -136,7 +155,41 @@ impl MerkleVerifier {
         // 2. Sort by leaf index
         records.sort_by_key(|r| r.leaf_index);
 
-        // 3. Reconstruct merkle tree
+        // 3. Validate record consistency
+        for (i, record) in records.iter().enumerate() {
+            // Verify leaf index matches position
+            if record.leaf_index != i as u64 {
+                tracing::error!(
+                    "Leaf index mismatch: expected {}, got {} at position {}",
+                    i, record.leaf_index, i
+                );
+                return Ok(false);
+            }
+
+            // Verify pool matches expected using the validation method
+            if !record.validate_pool(pool_pubkey) {
+                tracing::error!(
+                    "Pool mismatch in record {}: expected {}, got {}",
+                    i, pool_pubkey, record.pool
+                );
+                return Ok(false);
+            }
+
+            // Verify timestamp ordering (records should be chronologically ordered)
+            if i > 0 && record.created_at < records[i - 1].created_at {
+                tracing::warn!(
+                    "Timestamp ordering violation at index {}: {} < {} (age: {}s vs {}s)",
+                    i, 
+                    record.created_at, 
+                    records[i - 1].created_at,
+                    record.age_seconds(),
+                    records[i - 1].age_seconds()
+                );
+                // This is a warning, not a failure, as clock skew can cause this
+            }
+        }
+
+        // 4. Reconstruct merkle tree
         let mut tree = MerkleTree::new(tree_depth)
             .map_err(|e| RelayerError::MerkleTree(e.to_string()))?;
 
@@ -151,8 +204,8 @@ impl MerkleVerifier {
             
             if computed_root != record.merkle_root_after {
                 tracing::error!(
-                    "Merkle root mismatch at leaf index {}",
-                    record.leaf_index
+                    "Merkle root mismatch at leaf index {} (created at {})",
+                    record.leaf_index, record.created_at
                 );
                 tracing::error!("  Expected: {:?}", &record.merkle_root_after[..8]);
                 tracing::error!("  Computed: {:?}", &computed_root[..8]);
@@ -160,7 +213,7 @@ impl MerkleVerifier {
             }
         }
 
-        // 4. Verify current pool root
+        // 5. Verify current pool root
         let pool_account = self
             .rpc_client
             .get_account(pool_pubkey)
@@ -185,10 +238,16 @@ impl MerkleVerifier {
             return Ok(false);
         }
 
+        // 6. Log verification summary with timing info
+        let oldest_record = records.first().unwrap();
+        let newest_record = records.last().unwrap();
+        let time_span = newest_record.created_at - oldest_record.created_at;
+        
         tracing::info!(
-            "✓ Merkle tree verified for pool {} ({} commitments)",
+            "✓ Merkle tree verified for pool {} ({} commitments, {} second span)",
             pool_pubkey,
-            records.len()
+            records.len(),
+            time_span
         );
 
         Ok(true)
@@ -216,6 +275,30 @@ impl MerkleVerifier {
                 Ok(&record.commitment == expected_commitment)
             }
             Err(_) => Ok(false),
+        }
+    }
+
+    /// Fetch a specific commitment record by leaf index
+    pub async fn fetch_commitment_record(
+        &self,
+        pool_pubkey: &Pubkey,
+        leaf_index: u64,
+    ) -> Result<Option<CommitmentRecord>> {
+        let (commitment_pda, _) = Pubkey::find_program_address(
+            &[
+                b"commitment",
+                pool_pubkey.as_ref(),
+                &leaf_index.to_le_bytes(),
+            ],
+            &self.program_id,
+        );
+
+        match self.rpc_client.get_account(&commitment_pda) {
+            Ok(account) => {
+                let record = CommitmentRecord::try_from_slice(&account.data)?;
+                Ok(Some(record))
+            }
+            Err(_) => Ok(None),
         }
     }
 }
