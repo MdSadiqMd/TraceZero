@@ -344,4 +344,56 @@ mod tests {
         assert_eq!(record.created_at, 1234567890);
         assert_eq!(record.bump, 255);
     }
+
+    #[test]
+    fn test_commitment_record_validation() {
+        // Test that all fields are properly used in validation logic
+        let mut data = vec![0u8; 153];
+        
+        // Discriminator
+        data[0..8].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+        
+        // Commitment
+        let commitment = [42u8; 32];
+        data[8..40].copy_from_slice(&commitment);
+        
+        // Pool
+        let pool = Pubkey::new_unique();
+        data[40..72].copy_from_slice(pool.as_ref());
+        
+        // Leaf index
+        data[72..80].copy_from_slice(&5u64.to_le_bytes());
+        
+        // Merkle root after
+        let root = [99u8; 32];
+        data[80..112].copy_from_slice(&root);
+        
+        // Created at (current timestamp)
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        data[112..120].copy_from_slice(&now.to_le_bytes());
+        
+        // Bump
+        data[120] = 123;
+
+        let record = CommitmentRecord::try_from_slice(&data).unwrap();
+        
+        // Verify all fields are accessible and correct
+        assert_eq!(record.commitment, commitment);
+        assert_eq!(record.pool, pool);
+        assert_eq!(record.leaf_index, 5);
+        assert_eq!(record.merkle_root_after, root);
+        assert_eq!(record.created_at, now);
+        assert_eq!(record.pda_bump(), 123);
+        
+        // Test that created_at can be used for age calculation via the method
+        let age = record.age_seconds();
+        assert!(age >= 0 && age < 10); // Should be very recent
+        
+        // Test pool validation method
+        assert!(record.validate_pool(&pool));
+        assert!(!record.validate_pool(&Pubkey::new_unique()));
+    }
 }
