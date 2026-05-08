@@ -288,14 +288,41 @@ impl DepositService {
             }
         }
 
-        // Token redeemed but commitment not found - this shouldn't happen
-        // but could occur if local tree is out of sync
+        // Token redeemed but commitment not found in local tree
+        // This can happen when:
+        // 1. Local tree was reset (devnet recovery)
+        // 2. Tree sync failed/incomplete
+        // 
+        // The deposit DID succeed on-chain (UsedToken PDA exists), so we should
+        // return a success response indicating the deposit exists.
+        // 
+        // For devnet: Return success without leaf_index (user can check on-chain)
+        // For production: This would be a critical error requiring investigation
         warn!(
-            "Token redeemed but commitment not found in tree: bucket={}, token_hash={}",
+            "Token redeemed but commitment not found in local tree: bucket={}, token_hash={}",
             bucket_id, hex::encode(token_hash)
         );
         
-        // Return error to prevent double-spend
+        // Check if we're on devnet (RPC URL contains "devnet")
+        let rpc_url = std::env::var("RPC_URL").unwrap_or_default();
+        let is_devnet = rpc_url.contains("devnet");
+        
+        if is_devnet {
+            // On devnet, return success with partial info
+            // The deposit succeeded on-chain, user's funds are deposited
+            info!(
+                "Devnet: returning partial success for existing deposit (tree was likely reset)"
+            );
+            return Ok(Some(DepositResponse {
+                success: true,
+                tx_signature: None,
+                leaf_index: None, // Unknown due to tree reset
+                merkle_root: None, // Cannot provide accurate root
+                error: Some("Deposit exists on-chain but local tree was reset. Your deposit is safe but leaf_index is unknown. Check Solana explorer for your commitment.".to_string()),
+            }));
+        }
+        
+        // On production, this is a critical issue
         Err(RelayerError::TokenAlreadyRedeemed)
     }
 
