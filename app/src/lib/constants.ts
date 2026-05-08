@@ -11,22 +11,46 @@ export const BUCKET_AMOUNTS = [
 
 export const RELAYER_FEE_PERCENT = 0.5; // 0.5%
 
-// Make URLs configurable via environment variables
-// This prevents hardcoded values and allows Tor routing for RPC
-export const TOR_GATEWAY_URL = 
-  typeof window !== 'undefined' && (window as any).__TOR_GATEWAY_URL__ 
-    ? (window as any).__TOR_GATEWAY_URL__ 
-    : import.meta.env.VITE_TOR_GATEWAY_URL || "http://localhost:3080";
+function isLocalhost(): boolean {
+  if (typeof window === 'undefined') return false;
+  const hostname = window.location.hostname;
+  return hostname === 'localhost' || hostname === '127.0.0.1';
+}
 
-export const RELAYER_URL = 
-  typeof window !== 'undefined' && (window as any).__RELAYER_URL__ 
-    ? (window as any).__RELAYER_URL__ 
-    : import.meta.env.VITE_RELAYER_URL || "http://localhost:8080";
+function getRelayerUrl(): string {
+  if (typeof window !== 'undefined' && (window as any).__RELAYER_URL__) {
+    return (window as any).__RELAYER_URL__;
+  }
+  if (import.meta.env.VITE_RELAYER_URL) {
+    return import.meta.env.VITE_RELAYER_URL;
+  }
+  return "http://localhost:8080";
+}
 
-export const SOLANA_RPC_URL = 
-  typeof window !== 'undefined' && (window as any).__SOLANA_RPC_URL__ 
-    ? (window as any).__SOLANA_RPC_URL__ 
-    : import.meta.env.VITE_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+function getTorGatewayUrl(): string {
+  if (typeof window !== 'undefined' && (window as any).__TOR_GATEWAY_URL__) {
+    return (window as any).__TOR_GATEWAY_URL__;
+  }
+  
+  if (import.meta.env.VITE_TOR_GATEWAY_URL) {
+    return import.meta.env.VITE_TOR_GATEWAY_URL;
+  }
+  
+  return "http://localhost:3080";
+}
+
+function getSolanaRpcUrl(): string {
+  if (typeof window !== 'undefined' && (window as any).__SOLANA_RPC_URL__) {
+    return (window as any).__SOLANA_RPC_URL__;
+  }
+  
+  return import.meta.env.VITE_SOLANA_RPC_URL || "https://api.devnet.solana.com";
+}
+
+export const TOR_GATEWAY_URL = getTorGatewayUrl();
+export const RELAYER_URL = getRelayerUrl();
+export const SOLANA_RPC_URL = getSolanaRpcUrl();
+export const IS_LOCAL_DEV = isLocalhost();
 
 // Note: For production, SOLANA_RPC_URL should be routed through Tor gateway
 // to prevent DNS leaks. Example: http://localhost:3080/rpc (proxied to Solana RPC)
