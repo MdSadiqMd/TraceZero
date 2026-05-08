@@ -25,6 +25,8 @@ export interface DepositResponse {
   txSignature: string;
   leafIndex: number;
   merkleRoot: string;
+  /** If set, indicates this was an idempotent retry with partial info */
+  warning?: string;
 }
 
 export interface WithdrawalRequest {
@@ -87,8 +89,8 @@ export interface PendingWithdrawalInfo {
 }
 
 // Request timeout in milliseconds
-// Increased to 120s to handle slow devnet RPC and tree sync operations
-const REQUEST_TIMEOUT = 120000;
+// 180s to handle slow devnet RPC and on-chain transaction confirmation
+const REQUEST_TIMEOUT = 180000;
 
 // ECDH key pair for request encryption
 // Per-session keys with rotation
@@ -515,9 +517,9 @@ class RelayerClient {
     const response = await this.fetchViaTor<{
       success: boolean;
       tx_signature?: string;
-      leaf_index?: number;
-      merkle_root?: string;
-      error?: string;
+      leaf_index?: number | null;
+      merkle_root?: string | null;
+      error?: string | null;
     }>(`${RELAYER_URL}/deposit`, {
       method: "POST",
       body,
@@ -527,10 +529,24 @@ class RelayerClient {
       throw new Error(response.error || "Deposit failed");
     }
 
+    // Handle idempotent retry where tree was reset (leaf_index unknown)
+    if (response.leaf_index === null || response.leaf_index === undefined) {
+      // The deposit exists on-chain but we don't have the leaf index
+      // This happens when retrying after a timeout where the deposit succeeded
+      // but the local merkle tree was reset (common on devnet)
+      const warning = response.error || "Deposit exists but leaf index unknown (tree was reset)";
+      throw new Error(
+        `${warning}\n\nYour funds are deposited on-chain, but this deposit cannot be withdrawn through this interface because the leaf index was lost. ` +
+        `This is a known limitation on devnet when the relayer's merkle tree resets. ` +
+        `For production, merkle state backups prevent this issue.`
+      );
+    }
+
     return {
-      txSignature: response.tx_signature!,
-      leafIndex: response.leaf_index!,
-      merkleRoot: response.merkle_root!,
+      txSignature: response.tx_signature || "",
+      leafIndex: response.leaf_index,
+      merkleRoot: response.merkle_root || "",
+      warning: response.error || undefined,
     };
   }
 
