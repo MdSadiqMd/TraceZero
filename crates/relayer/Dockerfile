@@ -1,10 +1,4 @@
-# ============================================================
-# TraceZero Relayer — Multi-Stage Production Dockerfile
-# Stage 1: Build the relayer binary (never runs on EC2)
-# Stage 2: Minimal runtime image (~80MB final)
-# ============================================================
-
-FROM rust:1.78-bookworm AS builder
+FROM rust:1.92-bookworm AS builder
 
 WORKDIR /build
 
@@ -31,8 +25,22 @@ RUN mkdir -p crates/network/src crates/privacy-proxy-sdk/src crates/relayer/src 
     && echo "" > crates/tracer/src/main.rs
 
 RUN cargo build --release -p relayer 2>&1 || true
-# Remove stub artifacts so the real build picks up correctly
-RUN rm -f target/release/relayer target/release/deps/relayer*
+# Remove ALL workspace crate artifacts so real source gets a fresh compile.
+# External deps (from crates.io) remain cached — only our code is invalidated.
+RUN rm -rf \
+    target/release/relayer \
+    target/release/deps/relayer* \
+    target/release/deps/librelayer* \
+    target/release/deps/privacy_proxy_sdk* \
+    target/release/deps/libprivacy_proxy_sdk* \
+    target/release/deps/tracezero* \
+    target/release/deps/libtracezero* \
+    target/release/deps/tracer* \
+    target/release/deps/libtracer* \
+    target/release/.fingerprint/relayer-* \
+    target/release/.fingerprint/privacy-proxy-sdk-* \
+    target/release/.fingerprint/tracezero-* \
+    target/release/.fingerprint/tracer-*
 
 # Now copy real source
 COPY crates/ crates/
