@@ -137,6 +137,10 @@ function validateProxyUrl(urlString: string): { valid: boolean; error?: string; 
   }
 }
 
+// Internal relayer host (Docker network DNS name)
+const INTERNAL_RELAYER_HOST = process.env.INTERNAL_RELAYER_HOST || "relayer";
+const INTERNAL_RELAYER_PORT = process.env.INTERNAL_RELAYER_PORT || "8080";
+
 app.all("/proxy", async (req: Request, res: Response, next: NextFunction) => {
   const targetUrl = req.query.url as string;
   if (!targetUrl) {
@@ -156,16 +160,21 @@ app.all("/proxy", async (req: Request, res: Response, next: NextFunction) => {
     const fetch = fetchModule.default;
 
     const url = validation.url!;
-    const isLocalhost =
-      url.hostname === "localhost" || url.hostname === "127.0.0.1";
+    const isLocalRelayer =
+      url.hostname === "localhost" || 
+      url.hostname === "127.0.0.1" ||
+      url.hostname === "host.docker.internal" ||
+      url.hostname === "relayer";
 
     let finalUrl = targetUrl;
-    if (isLocalhost) {
-      const RELAYER_HOST = process.env.RELAYER_HOST || "host.docker.internal";
-      finalUrl = targetUrl.replace(/localhost|127\.0\.0\.1/, RELAYER_HOST);
-      console.log(
-        `[proxy] Localhost detected, routing via Tor to: ${finalUrl}`,
-      );
+    let useAgent: typeof agent | undefined = agent; // Default: use Tor
+
+    if (isLocalRelayer) {
+      // Route to internal relayer via Docker network (no Tor needed)
+      // This handles deposits/withdrawals to local relayer during development
+      finalUrl = `http://${INTERNAL_RELAYER_HOST}:${INTERNAL_RELAYER_PORT}${url.pathname}${url.search}`;
+      useAgent = undefined; // Direct connection, no Tor
+      console.log(`[proxy] Local relayer, direct connection to: ${finalUrl}`);
     } else {
       console.log(`[proxy] External URL, routing via Tor: ${targetUrl}`);
     }
@@ -180,7 +189,7 @@ app.all("/proxy", async (req: Request, res: Response, next: NextFunction) => {
         req.method !== "GET" && req.method !== "HEAD"
           ? JSON.stringify(req.body)
           : undefined,
-      agent: agent, // ALWAYS use Tor agent
+      agent: useAgent,
     });
 
     const contentType = response.headers.get("content-type");
