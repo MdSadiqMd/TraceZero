@@ -10,7 +10,7 @@ use solana_sdk::{
     transaction::Transaction,
 };
 use solana_transaction_status::UiTransactionEncoding;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -214,6 +214,10 @@ pub struct DepositService {
     merkle_service: Arc<MerkleService>,
     /// Persistent token store (prevents double-spend across restarts)
     token_store: Arc<RwLock<TokenStore>>,
+    /// Tracks buckets where sync was already attempted and logs were pruned (devnet).
+    /// Key: bucket_id, Value: on_chain_size at time of failed sync.
+    /// Prevents re-scanning 180+ transactions on every deposit (~2 min each time).
+    sync_pruned_cache: Arc<RwLock<HashMap<u8, u64>>>,
 }
 
 impl DepositService {
@@ -234,6 +238,7 @@ impl DepositService {
             blind_signer,
             merkle_service,
             token_store: Arc::new(RwLock::new(token_store)),
+            sync_pruned_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -370,13 +375,26 @@ impl DepositService {
             let local_size = self.merkle_service.size(bucket_id).await.unwrap_or(0) as u64;
 
             // Verify local tree is in sync with on-chain state
+            // But skip the expensive sync if we already know logs are pruned (devnet)
             if local_size != on_chain_next_index {
-                warn!(
-                    "Local tree out of sync with on-chain: local={}, on-chain={}. Syncing...",
-                    local_size, on_chain_next_index
-                );
-                // Sync local tree to match on-chain state
-                self.sync_local_tree(bucket_id, on_chain_next_index).await?;
+                let skip_sync = {
+                    let cache = self.sync_pruned_cache.read().await;
+                    cache.contains_key(&bucket_id)
+                };
+                
+                if skip_sync {
+                    info!(
+                        "Local tree out of sync (local={}, on-chain={}) but logs are pruned - proceeding with local tree",
+                        local_size, on_chain_next_index
+                    );
+                } else {
+                    warn!(
+                        "Local tree out of sync with on-chain: local={}, on-chain={}. Syncing...",
+                        local_size, on_chain_next_index
+                    );
+                    // Sync local tree to match on-chain state
+                    self.sync_local_tree(bucket_id, on_chain_next_index).await?;
+                }
             }
 
             // 6. Update local merkle tree to get the new root
@@ -469,6 +487,31 @@ impl DepositService {
             info!("Fresh pool (bucket {}), no sync needed", bucket_id);
             return Ok(());
         }
+
+        // FAST PATH: Check if we already know logs are pruned for this bucket.
+        // This prevents re-scanning 180+ tx on every deposit (~2 min wasted each time).
+        {
+            let cache = self.sync_pruned_cache.read().await;
+            if let Some(&cached_on_chain_size) = cache.get(&bucket_id) {
+                // We already tried to sync this bucket and logs were pruned.
+                // Only re-attempt if on-chain size has grown (new deposits since last check).
+                let new_deposits_since_cache = on_chain_size.saturating_sub(cached_on_chain_size);
+                if new_deposits_since_cache == 0 {
+                    // Nothing new on-chain - skip the expensive scan entirely
+                    info!(
+                        "Skipping sync for bucket {} (logs pruned, no new deposits since last check: on_chain={})",
+                        bucket_id, on_chain_size
+                    );
+                    return Ok(());
+                } else {
+                    // There might be new deposits with recoverable logs
+                    info!(
+                        "Bucket {} has {} new deposits since last pruned-cache check, attempting partial sync...",
+                        bucket_id, new_deposits_since_cache
+                    );
+                }
+            }
+        }
         
         // Case 2: Local has more than on-chain - should never happen
         if local_size > on_chain_size {
@@ -508,16 +551,21 @@ impl DepositService {
         let pool_pda = self.get_pool_pda(bucket_id);
 
         // Fetch transaction signatures for the pool account
-        let signatures = self
-            .rpc_client
-            .get_signatures_for_address(&pool_pda)
-            .await
-            .map_err(|e| {
-                RelayerError::TransactionFailed(format!(
-                    "Failed to fetch transaction history: {}",
-                    e
-                ))
-            })?;
+        // Use a timeout to prevent hanging on slow RPC
+        let signatures = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.rpc_client.get_signatures_for_address(&pool_pda),
+        )
+        .await
+        .map_err(|_| {
+            RelayerError::TransactionFailed("Timeout fetching transaction signatures".to_string())
+        })?
+        .map_err(|e| {
+            RelayerError::TransactionFailed(format!(
+                "Failed to fetch transaction history: {}",
+                e
+            ))
+        })?;
 
         info!(
             "Found {} transactions for pool {}",
@@ -526,56 +574,56 @@ impl DepositService {
         );
 
         // Parse deposit events from transaction logs
-        // We'll scan as many as needed to recover all deposits
+        // Only scan recent transactions (max 20) with a timeout per tx
         let mut commitments = Vec::new();
-        let max_to_scan = std::cmp::min(signatures.len(), 200); // Cap at 200 for safety
+        let max_to_scan = std::cmp::min(signatures.len(), 200);
         
-        info!("Scanning up to {} transactions to recover {} deposits...", max_to_scan, on_chain_size);
+        info!("Scanning up to {} recent transactions to recover deposits...", max_to_scan);
         
         for sig_info in signatures.iter().rev().take(max_to_scan) {
-            // Only scan last 20 transactions
             // Skip failed transactions
             if sig_info.err.is_some() {
                 continue;
             }
 
-            // Fetch full transaction to get logs
+            // Fetch full transaction to get logs (with per-tx timeout)
             let signature = sig_info.signature.parse().map_err(|e| {
                 RelayerError::InvalidRequest(format!("Invalid signature: {}", e))
             })?;
 
-            match self
-                .rpc_client
-                    .get_transaction(&signature, UiTransactionEncoding::Json)
-                    .await
-                {
-                    Ok(tx) => {
-                        if let Some(meta) = tx.transaction.meta {
-                            let log_messages: Option<Vec<String>> = meta.log_messages.into();
-                            if let Some(logs) = log_messages {
-                                for log in logs {
-                                    if log.contains("Program log: Deposit: commitment=") {
-                                        if let Some(hex_start) = log.find("commitment=") {
-                                            let hex_str = &log[hex_start + 11..];
-                                            // Extract 64 hex chars (32 bytes)
-                                            if hex_str.len() >= 64 {
-                                                let commitment_hex = &hex_str[..64];
-                                                match hex::decode(commitment_hex) {
-                                                    Ok(bytes) if bytes.len() == 32 => {
-                                                        let mut commitment = [0u8; 32];
-                                                        commitment.copy_from_slice(&bytes);
-                                                        commitments.push(commitment);
-                                                        info!(
-                                                            "Found commitment from tx {}: {}",
-                                                            signature, commitment_hex
-                                                        );
-                                                    }
-                                                    _ => {
-                                                        warn!(
-                                                            "Invalid commitment hex in log: {}",
-                                                            commitment_hex
-                                                        );
-                                                    }
+            let tx_result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                self.rpc_client.get_transaction(&signature, UiTransactionEncoding::Json),
+            )
+            .await;
+
+            match tx_result {
+                Ok(Ok(tx)) => {
+                    if let Some(meta) = tx.transaction.meta {
+                        let log_messages: Option<Vec<String>> = meta.log_messages.into();
+                        if let Some(logs) = log_messages {
+                            for log in logs {
+                                if log.contains("Program log: Deposit: commitment=") {
+                                    if let Some(hex_start) = log.find("commitment=") {
+                                        let hex_str = &log[hex_start + 11..];
+                                        // Extract 64 hex chars (32 bytes)
+                                        if hex_str.len() >= 64 {
+                                            let commitment_hex = &hex_str[..64];
+                                            match hex::decode(commitment_hex) {
+                                                Ok(bytes) if bytes.len() == 32 => {
+                                                    let mut commitment = [0u8; 32];
+                                                    commitment.copy_from_slice(&bytes);
+                                                    commitments.push(commitment);
+                                                    info!(
+                                                        "Found commitment from tx {}: {}",
+                                                        signature, commitment_hex
+                                                    );
+                                                }
+                                                _ => {
+                                                    warn!(
+                                                        "Invalid commitment hex in log: {}",
+                                                        commitment_hex
+                                                    );
                                                 }
                                             }
                                         }
@@ -584,10 +632,14 @@ impl DepositService {
                             }
                         }
                     }
-                    Err(e) => {
-                        warn!("Failed to fetch transaction {}: {}", signature, e);
-                    }
                 }
+                Ok(Err(e)) => {
+                    warn!("Failed to fetch transaction {}: {}", signature, e);
+                }
+                Err(_) => {
+                    warn!("Timeout fetching transaction {}, skipping", signature);
+                }
+            }
         }
 
         // Check if we found any commitments
@@ -611,6 +663,12 @@ impl DepositService {
                     warn!("⚠️  {} existing deposits will become UNWITHDRAWABLE", on_chain_size);
                     warn!("⚠️  This is acceptable for devnet testing");
                     warn!("⚠️  For production, ALWAYS maintain merkle_state backups");
+                    
+                    // Cache that logs are pruned so we don't re-scan next time
+                    {
+                        let mut cache = self.sync_pruned_cache.write().await;
+                        cache.insert(bucket_id, on_chain_size);
+                    }
                     
                     // Reset to fresh tree for devnet
                     self.merkle_service
