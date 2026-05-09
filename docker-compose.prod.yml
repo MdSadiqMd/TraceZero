@@ -106,11 +106,10 @@ services:
         condition: service_healthy
       tor-privoxy:
         condition: service_healthy
-    # Published to loopback only — safe on EC2 (UFW blocks external).
-    # Tor hidden service forwards .onion:8080 → 172.30.0.10:8080 (static IP).
-    # Localhost binding allows health checks + local dev testing.
+    # Bound to 0.0.0.0 — access control handled by UFW firewall on EC2.
+    # For local dev, this is also fine (only your machine).
     ports:
-      - "127.0.0.1:8080:8080"
+      - "0.0.0.0:8080:8080"
     healthcheck:
       test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
       interval: 30s
@@ -126,8 +125,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: "2.0"
+          memory: 1536M
         reservations:
           memory: 256M
 
@@ -141,8 +139,8 @@ services:
     container_name: tracezero-gateway
     restart: unless-stopped
     ports:
-      # Bind to loopback only — not exposed to internet
-      - "127.0.0.1:3080:3080"
+      # Bound to 0.0.0.0 — access control handled by UFW firewall on EC2.
+      - "0.0.0.0:3080:3080"
     environment:
       TOR_SOCKS_HOST: tor
       TOR_SOCKS_PORT: "9050"
