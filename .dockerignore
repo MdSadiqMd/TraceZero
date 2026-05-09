@@ -1,0 +1,57 @@
+# Build artifacts (Docker builds from source, not local target/)
+target/
+**/target/
+
+# Node dependencies and builds
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+*.tsbuildinfo
+
+# Secrets and keys — never send to build context
+keys/
+*.json.key
+*.der
+treasury.json
+.env
+.env.*
+!.env.production.example
+
+# Solana / Anchor state
+test-ledger/
+.anchor/
+**/.anchor/
+merkle_state/
+**/merkle_state/
+merkle_state_backup_*/
+used_tokens.dat
+used_tokens.checksum
+
+# Circuit build artifacts (large, not needed by relayer)
+circuits/build/
+
+# Logs and runtime state
+*.log
+**/*.log
+.local/
+
+# Dev tooling
+.git/
+.gitignore
+.gitattributes
+.vscode/
+.idea/
+.DS_Store
+
+# Frontend app (not needed for relayer build)
+app/
+
+# Docs
+docs/
+runbooks/
+deploy/
+scripts/
+
+# Programs (Anchor/Solana — only Rust crates needed for relayer)
+programs/

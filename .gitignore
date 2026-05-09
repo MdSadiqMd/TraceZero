@@ -41,9 +41,14 @@ used_tokens.checksum
 # Environment files (may contain secrets)
 .env
 .env.local
+.env.production
 .env.*.local
 **/.env
 **/.env.local
+
+# Production keypairs directory (never commit private keys)
+keys/
+**/keys/*.json
 
 # Node modules
 node_modules/
