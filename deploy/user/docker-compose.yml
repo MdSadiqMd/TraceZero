@@ -1,0 +1,66 @@
+# This runs on the USER'S machine to provide Tor connectivity.
+# The frontend (browser) connects through this local gateway.
+#
+# Setup:
+#   docker compose up -d
+#
+# Verify:
+#   curl http://localhost:3080/verify-tor
+#   (should return {"isTor":true,...})
+#
+# Stop:
+#   docker compose down
+
+services:
+  # Tor Daemon
+  # Provides SOCKS5 proxy for anonymous network access
+  tor:
+    image: tracezero/tor-proxy:latest
+    container_name: tracezero-tor
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "9050"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - tracezero-internal
+
+  # HTTP-to-SOCKS5 Gateway
+  # Bridges browser HTTP requests to Tor SOCKS5
+  # Browsers cannot speak SOCKS5 directly, so this gateway translates
+  tor-gateway:
+    image: tracezero/tor-gateway:latest
+    container_name: tracezero-gateway
+    ports:
+      # IMPORTANT: Bind to 127.0.0.1 only (not 0.0.0.0)
+      # This prevents other devices on your network from using your Tor
+      - "127.0.0.1:3080:3080"
+    environment:
+      - TOR_SOCKS_HOST=tor
+      - TOR_SOCKS_PORT=9050
+      - GATEWAY_PORT=3080
+      # Allowed origins: your browser's frontend URL
+      # Add your production frontend domain here
+      - ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173,https://app.tracezero.xyz
+      # Allowed relay hosts (the relayer's .onion address resolves via Tor)
+      - ALLOWED_RELAYER_HOSTS=localhost,127.0.0.1
+    depends_on:
+      tor:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - tracezero-internal
+
+networks:
+  tracezero-internal:
+    driver: bridge
+    # Internal network: containers can talk to each other
+    # But external machines cannot reach them (except via published ports)
