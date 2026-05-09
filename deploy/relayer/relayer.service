@@ -1,0 +1,71 @@
+[Unit]
+Description=TraceZero Privacy Relayer (Tor Hidden Service)
+Documentation=https://github.com/MdSadiqMd/TraceZero
+After=network.target tor.service privoxy.service
+Requires=tor.service privoxy.service
+
+[Service]
+Type=simple
+User=tracezero
+Group=tracezero
+WorkingDirectory=/opt/tracezero/state
+EnvironmentFile=/opt/tracezero/.env
+ExecStart=/opt/tracezero/bin/relayer
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+# Prevent privilege escalation
+NoNewPrivileges=true
+
+# Filesystem isolation
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+
+# Only allow writes to state directory
+ReadWritePaths=/opt/tracezero/state
+ReadOnlyPaths=/opt/tracezero/keys
+ReadOnlyPaths=/opt/tracezero/bin
+
+# Restrict capabilities
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+# System call filtering
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @mount @swap @reboot
+SystemCallArchitectures=native
+
+# Prevent memory exploits
+MemoryDenyWriteExecute=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+
+# Network: allow outbound only (Tor handles inbound)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Disable core dumps (prevent key leakage to disk)
+LimitCORE=0
+
+# Memory lock (prevent keys from being swapped to disk)
+LimitMEMLOCK=67108864
+
+LimitNOFILE=65536
+MemoryMax=2G
+CPUQuota=80%
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=tracezero-relayer
+
+[Install]
+WantedBy=multi-user.target

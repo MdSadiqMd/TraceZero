@@ -1,0 +1,66 @@
+## This configures Tor for TWO purposes:
+##   1. INBOUND: Hidden service exposing the relayer API
+##   2. OUTBOUND: SOCKS5 proxy for relayer's Solana RPC calls
+
+# General Settings
+RunAsDaemon 1
+DataDirectory /var/lib/tor
+User tor
+
+# Logging: notice level only (no debug info that leaks circuit details)
+Log notice file /var/log/tor/notices.log
+
+# Scrub sensitive information from logs (IP addresses, hostnames)
+SafeLogging 1
+
+# Hidden Service Configuration (INBOUND)
+# This creates a .onion address that maps to the local relayer
+# After first start, .onion address is in: /var/lib/tor/relayer_hidden_service/hostname
+# Private key is in: /var/lib/tor/relayer_hidden_service/hs_ed25519_secret_key
+HiddenServiceDir /var/lib/tor/relayer_hidden_service/
+HiddenServicePort 8080 127.0.0.1:8080
+
+# Use v3 onion services (256-bit addresses, more secure)
+HiddenServiceVersion 3
+
+# SOCKS5 Proxy (OUTBOUND — for Solana RPC routing)
+# Privoxy connects to this SOCKS5 port to route RPC calls through Tor
+SocksPort 127.0.0.1:9050
+
+# Only localhost can use the SOCKS proxy
+SocksPolicy accept 127.0.0.1
+SocksPolicy reject *
+
+# Performance Tuning
+# More entry guards = more circuit diversity for RPC calls
+NumEntryGuards 4
+
+# Circuit build timeout (Tor latency is acceptable for our use case)
+CircuitBuildTimeout 30
+LearnCircuitBuildTimeout 1
+
+# Keep circuits alive longer (reduces RPC reconnection overhead)
+MaxCircuitDirtiness 600
+
+# Allow enough circuits for concurrent RPC operations
+MaxClientCircuitsPending 64
+
+# Security Hardening
+# Disable control port (no remote management needed)
+# Management is done via systemd and SSM
+ControlPort 0
+CookieAuthentication 0
+
+# Disable transparent proxying (not needed)
+TransPort 0
+
+# Disable DNS port (not needed — Privoxy handles DNS)
+DNSPort 0
+
+# Resource Limits
+# Limit bandwidth if needed (0 = unlimited)
+# BandwidthRate 5 MBytes
+# BandwidthBurst 10 MBytes
+
+# Connection limits
+ConnLimit 1000
