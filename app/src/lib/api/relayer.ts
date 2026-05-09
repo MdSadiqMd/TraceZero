@@ -222,29 +222,30 @@ async function initializeKeyExchange(
 }
 
 async function getSharedSecret(relayerPubkeyHex?: string): Promise<Uint8Array> {
-  // M-07 FIX: Check if session expired
-  if (sharedSecret && !isSessionExpired()) {
-    return sharedSecret;
-  }
-
-  // Session expired or doesn't exist - create new one
-  if (isSessionExpired()) {
-    console.log("⏰ Session expired - fetching new relayer public key");
-    resetSession();
-  }
-
+  // Always fetch fresh relayer pubkey to detect restarts/key rotation
   if (!relayerPubkeyHex) {
-    // Fetch relayer's public key if not provided
     const info = (await fetch(`${RELAYER_URL}/info`).then((r) => r.json())) as {
       ecdh_pubkey?: string;
     };
     if (!info.ecdh_pubkey) {
-      // SECURITY: ECDH is REQUIRED - no fallback to plaintext
       throw new Error(
         "Relayer does not support ECDH encryption. Cannot proceed without encryption.",
       );
     }
     relayerPubkeyHex = info.ecdh_pubkey;
+  }
+
+  // If relayer's ECDH key changed (restart/rotation), reset our session
+  if (verifiedEcdhPubkey && verifiedEcdhPubkey !== relayerPubkeyHex) {
+    console.log("🔄 Relayer ECDH key changed (restart detected) - resetting session");
+    resetSession();
+  }
+  if (sharedSecret && !isSessionExpired()) {
+    return sharedSecret;
+  }
+  if (isSessionExpired()) {
+    console.log("Session expired - rotating ECDH keys");
+    resetSession();
   }
 
   return initializeKeyExchange(relayerPubkeyHex);

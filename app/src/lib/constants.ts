@@ -36,6 +36,11 @@ function getTorGatewayUrl(): string {
     return import.meta.env.VITE_TOR_GATEWAY_URL;
   }
   
+  // Caddy proxies /tor-gateway/* to the gateway service
+  const relayerUrl = getRelayerUrl();
+  if (relayerUrl && !relayerUrl.includes('localhost') && !relayerUrl.includes('127.0.0.1')) {
+    return `${relayerUrl}/tor-gateway`;
+  }
   return "http://localhost:3080";
 }
 

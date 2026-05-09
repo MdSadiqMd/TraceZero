@@ -1,12 +1,15 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "tracezero",
-  "compatibility_date": "2026-05-06",
-  "observability": {
-    "enabled": true
-  },
-  "main": "@tanstack/react-start/server-entry",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ]
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "tracezero",
+	"compatibility_date": "2026-05-06",
+	"observability": {
+		"enabled": true
+	},
+	"main": "@tanstack/react-start/server-entry",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"vars": {
+		"VITE_RELAYER_URL": ""
+	}
 }
