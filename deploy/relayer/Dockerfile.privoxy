@@ -1,0 +1,12 @@
+FROM alpine:3.19
+
+RUN apk add --no-cache privoxy
+
+COPY privoxy.conf /etc/privoxy/config
+
+# Privoxy runs as privoxy user by default on Alpine
+USER privoxy
+
+EXPOSE 8118
+
+CMD ["privoxy", "--no-daemon", "/etc/privoxy/config"]
