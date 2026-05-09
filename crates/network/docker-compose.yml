@@ -3,7 +3,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: tracezero-tor
+    container_name: tracezero-tor-dev
     ports:
       - "9050:9050"
     restart: unless-stopped
@@ -18,7 +18,7 @@ services:
     build:
       context: ../tor-gateway
       dockerfile: Dockerfile
-    container_name: tracezero-gateway
+    container_name: tracezero-gateway-dev
     ports:
       - "3080:3080"
     environment:

@@ -1,16 +1,19 @@
 FROM alpine:3.19
 
-RUN apk add --no-cache tor netcat-openbsd
+RUN apk add --no-cache tor netcat-openbsd su-exec
 
-# Create tor user and directories
-RUN mkdir -p /var/lib/tor && \
-    chown -R tor:tor /var/lib/tor
+# Create tor directories (including hidden service dir before volume mount)
+RUN mkdir -p /var/lib/tor/hidden_service && \
+    chown -R tor:tor /var/lib/tor && \
+    chmod 700 /var/lib/tor/hidden_service
 
-# Copy torrc config
+# Copy default torrc (overridden via volume mount in production)
 COPY torrc /etc/tor/torrc
-
-USER tor
 
 EXPOSE 9050
 
-CMD ["tor", "-f", "/etc/tor/torrc"]
+# Entrypoint: fix volume ownership then exec Tor as 'tor' user
+# This handles the Docker volume mount (created as root) ownership issue
+CMD chown -R tor:tor /var/lib/tor && \
+    chmod 700 /var/lib/tor/hidden_service && \
+    su-exec tor tor -f /etc/tor/torrc

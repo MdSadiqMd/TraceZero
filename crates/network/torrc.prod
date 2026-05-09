@@ -8,9 +8,12 @@ SafeLogging 1
 
 # Hidden Service
 # External: <onion-addr>.onion:8080
-# Internal: relayer container port 8080 (Docker internal DNS: relayer)
+# Internal: forward to relayer container (resolved via Docker network)
+# NOTE: Tor cannot resolve Docker DNS names. We use the static subnet IP
+# assigned to the relayer via docker-compose.prod.yml networks config.
+# The relayer is assigned 172.30.0.10 in the tracezero-internal network.
 HiddenServiceDir /var/lib/tor/hidden_service/
-HiddenServicePort 8080 relayer:8080
+HiddenServicePort 8080 172.30.0.10:8080
 HiddenServiceVersion 3
 
 # SOCKS5 Proxy (for relayer outbound + tor-gateway)
