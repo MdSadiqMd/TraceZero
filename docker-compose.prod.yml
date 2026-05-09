@@ -1,0 +1,193 @@
+# docker compose -f docker-compose.prod.yml up -d
+#
+# Services:
+#   tor         — Tor daemon (SOCKS5 out + hidden service in)
+#   tor-gateway — HTTP→Tor bridge for browser clients
+#   relayer     — Rust relayer (routes all RPC traffic through tor-privoxy)
+#   tor-privoxy — HTTP→SOCKS5 bridge for relayer's outbound RPC calls
+#
+# Prerequisites:
+#   - Copy .env.production.example → .env.production and fill in all values
+#   - Place keypair files in ./keys/ (see .env.production.example)
+#
+# Start command (always use --remove-orphans to kill the dev Tor stack):
+#   docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
+#
+# If "container name already in use" error appears, stop the dev stack first:
+#   docker compose -f crates/network/docker-compose.yml down
+
+services:
+  # Tor daemon
+  # Provides:
+  #   - SOCKS5 on port 9050 (internal network only)
+  #   - Hidden service: external .onion:8080 → relayer:8080
+  tor:
+    build:
+      context: ./crates/network
+      dockerfile: Dockerfile
+    container_name: tracezero-tor
+    restart: unless-stopped
+    volumes:
+      # Persist hidden service keys so .onion address survives restarts
+      - tor-hidden-service:/var/lib/tor/hidden_service
+      - ./crates/network/torrc.prod:/etc/tor/torrc:ro
+    networks:
+      - tracezero-internal
+    # No published ports — SOCKS5 is internal only
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "9050"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Privoxy (HTTP→Tor bridge for relayer outbound RPC)
+  # Relayer sets HTTP_PROXY=http://tor-privoxy:8118 so all Solana
+  # RPC calls route Relayer → Privoxy → Tor → Solana RPC Node
+  # This requires ZERO changes to the relayer source code.
+  tor-privoxy:
+    build:
+      context: ./deploy/relayer
+      dockerfile: Dockerfile.privoxy
+    container_name: tracezero-privoxy
+    restart: unless-stopped
+    networks:
+      - tracezero-internal
+    depends_on:
+      tor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "nc -z 127.0.0.1 8118 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+  # Relayer
+  # Axum HTTP server. Bound to relayer:8080 inside Docker only.
+  # Accessible externally only via Tor hidden service.
+  relayer:
+    build:
+      context: .
+      dockerfile: crates/relayer/Dockerfile
+    image: tracezero-relayer:latest
+    container_name: tracezero-relayer
+    restart: unless-stopped
+    env_file:
+      - .env.production
+    environment:
+      # Route all outbound HTTP/HTTPS through Privoxy → Tor
+      HTTP_PROXY: "http://tor-privoxy:8118"
+      HTTPS_PROXY: "http://tor-privoxy:8118"
+      # Override host/port to bind correctly inside container
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      RUST_LOG: "info,relayer=info,tower_http=warn"
+    volumes:
+      # State: merkle_state + used_tokens (must survive restarts)
+      - relayer-state:/app/state
+      # Keys: read-only inside container
+      - ./keys:/app/keys:ro
+    networks:
+      tracezero-internal:
+        ipv4_address: 172.30.0.10
+    depends_on:
+      tor:
+        condition: service_healthy
+      tor-privoxy:
+        condition: service_healthy
+    # Published to loopback only — safe on EC2 (UFW blocks external).
+    # Tor hidden service forwards .onion:8080 → 172.30.0.10:8080 (static IP).
+    # Localhost binding allows health checks + local dev testing.
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+        reservations:
+          memory: 256M
+
+  # Tor Gateway (user-facing HTTP→Tor proxy for browsers)
+  # Lets browser clients proxy their own Solana RPC and relayer
+  # calls through Tor. Bound to 127.0.0.1:3080 on the host.
+  tor-gateway:
+    build:
+      context: ./crates/tor-gateway
+      dockerfile: Dockerfile
+    container_name: tracezero-gateway
+    restart: unless-stopped
+    ports:
+      # Bind to loopback only — not exposed to internet
+      - "127.0.0.1:3080:3080"
+    environment:
+      TOR_SOCKS_HOST: tor
+      TOR_SOCKS_PORT: "9050"
+      GATEWAY_PORT: "3080"
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000,https://tracezero.mohammadsadiq4950.workers.dev}"
+      ALLOWED_RELAYER_HOSTS: "localhost,127.0.0.1,relayer,host.docker.internal"
+      # Internal relayer address for Docker network routing (bypasses Tor)
+      INTERNAL_RELAYER_HOST: "relayer"
+      INTERNAL_RELAYER_PORT: "8080"
+    networks:
+      - tracezero-internal
+    depends_on:
+      tor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Volumes
+volumes:
+  # Hidden service keys persist across container rebuilds.
+  # Back this up — losing it means losing your .onion address.
+  tor-hidden-service:
+    driver: local
+
+  # Relayer state: merkle_state/ + used_tokens.dat + used_tokens.checksum
+  # CRITICAL: back this up hourly. If lost, existing deposits cannot be withdrawn.
+  relayer-state:
+    driver: local
+
+# Networks
+networks:
+  tracezero-internal:
+    driver: bridge
+    # Explicit subnet to avoid conflicts with other Docker networks
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+    # Prevent containers from communicating outside this stack
+    internal: false  # needs external access for Tor circuits
