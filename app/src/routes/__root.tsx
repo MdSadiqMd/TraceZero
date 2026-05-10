@@ -16,14 +16,14 @@ export const Route = createRootRoute({
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
-      { title: "Privacy Proxy - Anonymous Solana Transactions" },
+      { title: "TraceZero - Privacy proxy for your Solana Transactions" },
       {
         name: "description",
         content:
           "ZK-powered private transactions on Solana with complete sender untraceability",
       },
     ],
-    links: [{ rel: "icon", href: "/favicon.ico" }],
+    links: [{ rel: "icon", href: "/logo.jpeg" }],
   }),
   component: RootComponent,
 });
@@ -51,14 +51,24 @@ function Header() {
         <div className="flex items-center justify-between">
           {/* Logo */}
           <Link to="/" className="flex items-center gap-3 group">
-            <div className="w-10 h-10 border-2 border-lime bg-black flex items-center justify-center group-hover:bg-lime transition-colors">
-              <span className="text-2xl group-hover:scale-110 transition-transform">
-                👁️
-              </span>
+            <div className="w-10 h-10 overflow-hidden rounded-sm group-hover:opacity-80 transition-opacity">
+              <img 
+                src="/logo.jpeg" 
+                alt="TraceZero" 
+                className="w-full h-full object-cover"
+              />
             </div>
-            <span className="font-mono font-black text-lime text-xl">
-              TRACE_ZERO
-            </span>
+            <div className="flex flex-col">
+              <span className="font-mono font-black text-lime text-xl leading-none">
+                TRACE_ZERO
+              </span>
+              <div className="flex items-center gap-2 mt-1">
+                <div className="w-1.5 h-1.5 bg-lime rounded-full animate-pulse"></div>
+                <span className="font-mono text-[10px] text-lime/80 font-bold tracking-wider">
+                  LIVE_ON_DEVNET
+                </span>
+              </div>
+            </div>
           </Link>
 
           {/* Navigation */}
@@ -98,6 +108,8 @@ function Header() {
                 {">"}
               </span>
               <span className="group-[.active]:ml-4">CLAIM</span>
+            </Link>
+          </nav>
             </Link>
           </nav> */}
 
