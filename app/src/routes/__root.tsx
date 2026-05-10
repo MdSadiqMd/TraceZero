@@ -62,7 +62,7 @@ function Header() {
           </Link>
 
           {/* Navigation */}
-          <nav className="hidden md:flex items-center gap-1 font-mono text-sm font-bold">
+          {/* <nav className="hidden md:flex items-center gap-1 font-mono text-sm font-bold">
             <Link
               to="/credits"
               className="px-4 py-2 text-white/60 hover:text-lime hover:bg-lime/5 transition-all duration-200 [&.active]:text-lime [&.active]:bg-lime/10 relative group"
@@ -99,7 +99,7 @@ function Header() {
               </span>
               <span className="group-[.active]:ml-4">CLAIM</span>
             </Link>
-          </nav>
+          </nav> */}
 
           {/* Social & Wallet */}
           <div className="flex items-center gap-3">
@@ -118,7 +118,7 @@ function Header() {
             
             {/* Twitter */}
             <a
-              href="https://twitter.com/tracezero"
+              href="https://x.com/Md_Sadiq_Md/status/2030684954611610065?s=20"
               target="_blank"
               rel="noopener noreferrer"
               className="w-10 h-10 border-2 border-lime/30 hover:border-lime flex items-center justify-center transition-colors group"

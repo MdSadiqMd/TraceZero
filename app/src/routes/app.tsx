@@ -116,12 +116,13 @@ function OneStepApp() {
     }
   }, [connected, connection]);
 
-  // Auto-fill recipient with connected wallet
-  useEffect(() => {
-    if (publicKey && !recipientAddress) {
-      setRecipientAddress(publicKey.toBase58());
-    }
-  }, [publicKey, recipientAddress]);
+  // Auto-fill recipient with connected wallet - REMOVED
+  // User must explicitly enter recipient address
+  // useEffect(() => {
+  //   if (publicKey && !recipientAddress) {
+  //     setRecipientAddress(publicKey.toBase58());
+  //   }
+  // }, [publicKey, recipientAddress]);
 
   // Fetch balance when wallet connects
   useEffect(() => {
@@ -209,13 +210,28 @@ function OneStepApp() {
   };
 
   const handleExecuteFlow = async () => {
-    if (!connected || !publicKey || selectedBucket === null || !recipientAddress) return;
+    if (!connected || !publicKey || selectedBucket === null || !recipientAddress) {
+      setError("MISSING_REQUIRED_FIELDS: Please select amount and enter recipient address");
+      return;
+    }
 
     // Validate recipient address
     try {
-      new PublicKey(recipientAddress);
+      const recipientPubkey = new PublicKey(recipientAddress);
+      
+      // Additional validation: Check if it's a valid base58 string
+      if (recipientPubkey.toBase58() !== recipientAddress) {
+        throw new Error("Invalid address format");
+      }
+      
+      // Check if recipient is the system program (invalid)
+      if (recipientPubkey.equals(new PublicKey("11111111111111111111111111111111"))) {
+        setError("INVALID_RECIPIENT: Cannot send to system program address");
+        return;
+      }
+      
     } catch {
-      setError("INVALID_RECIPIENT_ADDRESS");
+      setError("INVALID_RECIPIENT_ADDRESS: Please enter a valid Solana address (base58 format)");
       return;
     }
 
@@ -471,7 +487,7 @@ function OneStepApp() {
     <div className="min-h-screen bg-black text-white py-12 px-6">
       <div className="max-w-7xl mx-auto">
         {/* Header */}
-        <div className="mb-12">
+        {/* <div className="mb-12">
           <div className="flex items-center justify-between mb-6">
             <div className="inline-block border-2 border-lime px-4 py-2">
               <span className="font-mono text-lime text-sm font-bold">
@@ -488,7 +504,7 @@ function OneStepApp() {
               // </div>
             )}
           </div>
-        </div>
+        </div> */}
 
         {/* Network Warning - Force Devnet */}
         {showNetworkWarning && !isProcessing && (
@@ -586,6 +602,7 @@ function OneStepApp() {
                 <div className="w-3 h-3 bg-lime/50"></div>
                 <div className="w-3 h-3 bg-lime/20"></div>
                 <span className="ml-4 text-lime">RECIPIENT</span>
+                <span className="ml-auto text-xs text-red-500 font-mono">*REQUIRED</span>
               </div>
               <div>
                 <label className="block font-mono text-xs text-lime/60 mb-2">
@@ -594,10 +611,12 @@ function OneStepApp() {
                 <input
                   type="text"
                   value={recipientAddress}
-                  onChange={(e) => setRecipientAddress(e.target.value)}
-                  placeholder="ENTER_SOLANA_ADDRESS"
+                  onChange={(e) => setRecipientAddress(e.target.value.trim())}
+                  placeholder="Enter Solana address (e.g., 7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU)"
                   disabled={isProcessing}
-                  className="w-full bg-black border-2 border-lime/30 px-4 py-3 font-mono text-sm text-white focus:border-lime focus:outline-none disabled:opacity-50"
+                  className={`w-full bg-black border-2 px-4 py-3 font-mono text-sm text-white focus:border-lime focus:outline-none disabled:opacity-50 ${
+                    recipientAddress ? 'border-lime/30' : 'border-red-500/50'
+                  }`}
                 />
                 <div className="text-xs font-mono text-white/40 mt-2">
                   {">"} FUNDS_WILL_BE_SENT_DIRECTLY_HERE

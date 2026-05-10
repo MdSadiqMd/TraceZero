@@ -320,7 +320,7 @@ function Home() {
         <div className="max-w-4xl mx-auto text-center">
           <h2 className="font-mono font-black text-5xl lg:text-6xl mb-8">
             <span className="text-white">READY_TO_</span>
-            <span className="text-lime neon-lime">DEPLOY</span>
+            <span className="text-lime neon-lime">TRANSACT</span>
             <span className="text-white">?</span>
           </h2>
           <p className="font-mono text-xl text-white/60 mb-12">

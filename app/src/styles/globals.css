@@ -149,9 +149,9 @@ body {
 /* Neon glow */
 .neon-lime {
   text-shadow:
-    0 0 10px #bfff00,
-    0 0 20px #bfff00,
-    0 0 30px #bfff00;
+    0 0 30px #bfff00,
+    0 0 70px #bfff00,
+    0 0 130px #bfff00;
 }
 
 .neon-cyan {
