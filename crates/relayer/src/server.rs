@@ -203,6 +203,22 @@ impl RelayerState {
             }
         });
 
+        // Spawn background task to auto-execute ready withdrawals every 10 seconds
+        let withdrawal_service_clone = withdrawal_service.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                let results = withdrawal_service_clone.poll_and_execute().await;
+                for (recipient, result) in results {
+                    match result {
+                        Ok(tx) => tracing::info!("✓ Auto-executed withdrawal to {}: tx={}", recipient, tx),
+                        Err(e) => tracing::error!("✗ Auto-execute withdrawal to {} failed: {}", recipient, e),
+                    }
+                }
+            }
+        });
+
         Ok(Self {
             config,
             rpc_client,
@@ -266,8 +282,10 @@ pub async fn run(state: Arc<RelayerState>) -> anyhow::Result<()> {
             config: Arc::new(governor_conf),
         })
         .layer(TraceLayer::new_for_http())
-        .layer(CorsLayer::permissive())
-        .with_state(state.clone());
+        .with_state(state.clone())
+        // CORS must wrap everything — applied last so it runs first (Axum reverses layer order)
+        // This ensures OPTIONS preflight is handled before rate limiting
+        .layer(CorsLayer::permissive());
 
     let addr = format!("{}:{}", state.config.host, state.config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
