@@ -1482,12 +1482,12 @@ flowchart TB
     end
     
     subgraph Relayer["Relayer Infrastructure (Hardened)"]
-        REL1[Relayer Service<br/>Tor Hidden Service<br/>✓ Rate limiting H04<br/>✓ RSA auth C05<br/>✓ Idempotency<br/>✓ No version exposure L03]
+        REL1[Relayer Service<br/>Tor Hidden Service<br/>✓ Rate limiting H04<br/>✓ RSA auth C05<br/>✓ Idempotency<br/>✓ No version exposure L03<br/>✓ Merkle verification M09]
         REL2[Deposit Wallet<br/>Pool Deposits + Fee Payment<br/>✓ Balance checks H05<br/>✓ Atomic operations M10]
         REL2B[Treasury Wallet<br/>Credit Payments Only<br/>✓ Wallet separation]
-        REL3[Merkle Tree Service<br/>Proof Generation<br/>✓ Root computation M09<br/>✓ Multi-account M11]
+        REL3[Merkle Tree Service<br/>Proof Generation<br/>✓ Root computation M09<br/>✓ Multi-account M11<br/>✓ Trustless verification]
         REL4[Token Store<br/>used_tokens.dat<br/>✓ Replay prevention M04<br/>✓ Persistent storage]
-        REL5[Merkle State<br/>merkle_state/*.json<br/>✓ Sync optimization<br/>✓ Idempotent recovery]
+        REL5[Merkle State<br/>merkle_state/*.json<br/>✓ Sync optimization<br/>✓ Idempotent recovery<br/>✓ Verification endpoints]
     end
     
     subgraph Frontend["Frontend (Secured)"]
@@ -1662,7 +1662,7 @@ Then:
 | **Gateway crashes** | ✅ | **Docker health checks** | **L08** |
 | **Hash inconsistency** | ✅ | **Domain tags documented** | **L09** |
 | **State bloat** | ⚠️ | **Documented for future (90-day expiration)** | **L01** |
-| **Merkle root attacks** | ✅ | **Mitigated by M09 (cryptographic prevention)** | **L05** |
+| **Merkle root attacks** | ✅ | **Cryptographic prevention + trustless verification** | **M09** |
 | **Claim privacy** | ⚠️ | **By design, documented with user guide** | **A03** |
 | **Timeout retry errors** | ✅ | **Idempotency check before processing** | **Idempotency fix** |
 
@@ -1764,6 +1764,45 @@ EncryptedNote:     8 + 32 + 128 + 32 + 8 + 1 = 209 bytes
 ## 12. Security Audit Fixes (Session 2 - May 2026)
 
 ### 12.1 Medium Severity Fixes
+
+#### M-09: Merkle Root Verification ✅
+
+**Issue**: Relayer could submit arbitrary merkle roots without on-chain verification.
+
+**Fix**: On-chain Poseidon verification + trustless off-chain verification
+```rust
+// On-chain verification in deposit instruction
+let computed_root = compute_merkle_root(&commitment, &pool.merkle_root, pool.next_index);
+require!(computed_root == merkle_root, PrivacyProxyError::InvalidMerkleRoot);
+
+// Off-chain trustless verification (M-09 enhancement)
+// Relayer exposes verification endpoints for users to independently verify
+// merkle tree construction against on-chain commitment records
+```
+
+**Trustless Verification Features**:
+- **Startup Verification**: Automatic verification of all merkle trees during relayer initialization
+- **Periodic Verification**: Background verification every 5 minutes to detect state drift
+- **Admin Endpoints**: Public endpoints for independent verification
+  - `/admin/verify_merkle/:bucket_id` - Verify specific bucket
+  - `/admin/verify_all_merkle` - Verify all buckets
+  - `/admin/verify_commitment/:bucket_id/:leaf_index/:commitment` - Check specific commitment
+  - `/admin/commitment_record/:bucket_id/:leaf_index` - Get detailed record info
+
+**Verification Process**:
+1. Fetch all commitment PDAs from on-chain
+2. Reconstruct merkle tree from commitments
+3. Verify each intermediate root matches on-chain records
+4. Validate final root matches current pool root
+5. Check index consistency, pool validation, and timestamp ordering
+
+**Security Properties**:
+- Users can independently verify relayer honesty
+- No need to trust relayer's local merkle state
+- Complete audit trail of all commitments
+- Detects state corruption immediately
+
+**Deployment**: Devnet `5YZCxGxeaQJiqhrxQSQY3z4BNkvHa27WpgaW1ei9NkTa8KTus2bXv6zyiKaDxFwCPx6YscFwUU3917vFUbyzuQTy`
 
 #### M-13: Recipient Address Validation ✅
 
@@ -2110,9 +2149,14 @@ if let Some(existing) = self.check_existing_deposit(bucket_id, &request.commitme
 - Files: `app/src/lib/constants.ts`
 
 **M09: Merkle Root Verification** ✅
-- On-chain Poseidon verification
+- On-chain Poseidon verification + trustless off-chain verification
 - Prevents malicious root manipulation
-- Files: `programs/privacy_proxy/src/instructions/deposit.rs`
+- **Trustless Verification**: Users can independently verify relayer honesty
+  - Startup verification of all merkle trees
+  - Periodic verification every 5 minutes
+  - Public admin endpoints for verification
+  - Complete audit trail of commitments
+- Files: `programs/privacy_proxy/src/instructions/deposit.rs`, `crates/relayer/src/merkle_verifier.rs`
 
 **M10: Non-Atomic Transfers** ✅
 - Calculate-then-apply pattern
@@ -2451,6 +2495,7 @@ if let Some(existing) = self.check_existing_deposit(bucket_id, &request.commitme
 **Relayer**:
 - RSA authentication (C05)
 - Merkle root computation (M09)
+- Trustless verification endpoints (M09)
 - Pool-specific token tracking (M04)
 - Rate limiting (H04)
 - Tor integration (H06-H11)

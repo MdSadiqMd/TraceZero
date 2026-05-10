@@ -1,10 +1,22 @@
 # TraceZero
 Privacy-preserving transactions on Solana using ZK proofs, blind signatures, and Tor routing
 
+## How It Works
+
+**TraceZero breaks the on-chain transaction graph using cryptographic unlinkability:**
+
+1. **Blind Signature Unlinkability** — Purchase credits using RSA-2048 blind signatures (RFC 9474). Payment is visible on-chain but cryptographically unlinkable to deposits via blinding factors.
+
+2. **Zero-Knowledge Anonymity Set** — Deposit via Tor using Poseidon commitments. Withdraw with Groth16 ZK-SNARKs proving Merkle membership without revealing which deposit is yours.
+
+3. **Stealth Address Privacy** — Withdraw to one-time X25519 ECDH stealth addresses. Observers see transfers from unknown addresses with no link to deposits.
+
+4. **Network-Layer Anonymity** — All operations route through Tor with circuit isolation and end-to-end ECDH encryption, ensuring IP addresses never correlate with transactions.
+
 ## Demo Video
 <div>
   <a 
-  href="https://www.youtube.com/watch?v=GiYUNCKu6SA"
+  href="https://www.youtube.com/watch?v=dtvLHFcjZ60"
   style="
     display: inline-flex;
     align-items: center;
@@ -26,7 +38,7 @@ Privacy-preserving transactions on Solana using ZK proofs, blind signatures, and
     Watch Full Video on YouTube
   </a>
 
-  <a href="https://www.youtube.com/watch?v=GiYUNCKu6SA">
+  <a href="https://www.youtube.com/watch?v=dtvLHFcjZ60">
     <img 
       src="https://img.youtube.com/vi/GiYUNCKu6SA/maxresdefault.jpg" 
       alt="TraceZero Demo" 
