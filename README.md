@@ -188,10 +188,10 @@ flowchart LR
     TX2 ~~~ TX3
     TX3 ~~~ TX4
 
-    B1["🔒 RSA Blind Signature RFC 9474<br/>+ Treasury ≠ Deposit Wallet<br/>+ Blind Sig Verification (M01)<br/>+ Encrypted Storage (C01)"]
-    B2["🔒 Groth16 ZK-SNARK<br/>+ Nullifier Tracking (C02)<br/>+ Binding Hash<br/>+ Multi-Account Roots (M11)<br/>+ Field Reduction (M02)"]
-    B3["🔒 X25519 ECDH Stealth Address<br/>+ BN254 Field Reduction<br/>+ Recipient Validation (M13)<br/>+ Stealth Address (H03)"]
-    B4["🔒 Network Security<br/>+ Tor Circuit Isolation <br/>+ Multi-Gateway <br/>+ E2E Encryption <br/>+ Tor-Only Mode <br/>+ TLS Enforcement <br/>+ Health Checks"]
+    B1["RSA Blind Signature RFC 9474<br/>+ Treasury ≠ Deposit Wallet<br/>+ Blind Sig Verification (M01)<br/>+ Encrypted Storage (C01)"]
+    B2["Groth16 ZK-SNARK<br/>+ Nullifier Tracking (C02)<br/>+ Binding Hash<br/>+ Multi-Account Roots (M11)<br/>+ Field Reduction (M02)"]
+    B3["X25519 ECDH Stealth Address<br/>+ BN254 Field Reduction<br/>+ Recipient Validation (M13)<br/>+ Stealth Address (H03)"]
+    B4["Network Security<br/>+ Tor Circuit Isolation <br/>+ Multi-Gateway <br/>+ E2E Encryption <br/>+ Tor-Only Mode <br/>+ TLS Enforcement <br/>+ Health Checks"]
 
     TX1 -.-|link broken by| B1
     B1 -.-|unlinkable| TX2
