@@ -310,6 +310,11 @@ export class SecureStealthStorage {
   private keys: StoredStealthKey[] = [];
   private initialized = false;
 
+  constructor() {
+    // Ensure keys is always an array
+    this.keys = [];
+  }
+
   /**
    * Initialize storage with password
    * Must be called before any other operations
@@ -337,7 +342,15 @@ export class SecureStealthStorage {
         // It's encrypted - decrypt it
         const encryptedStore: EncryptedStore = parsed;
         const decrypted = await decrypt(encryptedStore, password);
-        this.keys = JSON.parse(decrypted);
+        const decryptedData = JSON.parse(decrypted);
+        
+        // Ensure it's an array - CRITICAL: Always validate
+        if (Array.isArray(decryptedData)) {
+          this.keys = decryptedData;
+        } else {
+          console.warn('Decrypted data is not an array, resetting to empty');
+          this.keys = [];
+        }
       } else if (Array.isArray(parsed)) {
         // It's old plaintext data - migrate it
         console.warn('Migrating plaintext stealth keys to encrypted storage');
@@ -345,8 +358,9 @@ export class SecureStealthStorage {
         // Save encrypted version
         await this.save();
       } else {
-        // Unknown format
-        throw new Error('Unknown storage format');
+        // Unknown format - reset to empty
+        console.warn('Unknown storage format, resetting to empty');
+        this.keys = [];
       }
       
       this.initialized = true;
@@ -359,6 +373,8 @@ export class SecureStealthStorage {
       // Wrong password or corrupted data
       console.error('Failed to initialize storage:', error);
       this.password = null;
+      this.keys = [];
+      this.initialized = false;
       return false;
     }
   }
@@ -405,10 +421,32 @@ export class SecureStealthStorage {
    * Add a stealth key
    */
   async addKey(entry: StoredStealthKey): Promise<void> {
-    if (!this.initialized) throw new Error("Storage not initialized");
+    if (!this.initialized) {
+      throw new Error("Storage not initialized");
+    }
     
-    // Avoid duplicates
-    if (this.keys.some((k) => k.stealthAddress === entry.stealthAddress)) return;
+    // CRITICAL: Ensure keys is always an array before any operation
+    if (!Array.isArray(this.keys)) {
+      console.error('CRITICAL: keys was not an array, resetting to empty array');
+      this.keys = [];
+    }
+    
+    // Validate entry
+    if (!entry || !entry.stealthAddress) {
+      throw new Error("Invalid stealth key entry");
+    }
+    
+    // Avoid duplicates - use try-catch in case .some() fails
+    try {
+      if (this.keys.some((k) => k.stealthAddress === entry.stealthAddress)) {
+        console.log('Stealth key already exists, skipping duplicate');
+        return;
+      }
+    } catch (error) {
+      console.error('Error checking for duplicates:', error);
+      // Reset keys if .some() fails
+      this.keys = [];
+    }
     
     this.keys.push(entry);
     await this.save();
@@ -419,6 +457,13 @@ export class SecureStealthStorage {
    */
   getKeys(): StoredStealthKey[] {
     if (!this.initialized) throw new Error("Storage not initialized");
+    
+    // Ensure keys is an array
+    if (!Array.isArray(this.keys)) {
+      console.warn('Keys was not an array, resetting to empty array');
+      this.keys = [];
+    }
+    
     return [...this.keys];
   }
 
@@ -426,7 +471,8 @@ export class SecureStealthStorage {
    * Get unswept stealth keys
    */
   getUnsweptKeys(): StoredStealthKey[] {
-    return this.getKeys().filter((k) => !k.swept);
+    const keys = this.getKeys();
+    return keys.filter((k) => !k.swept);
   }
 
   /**
@@ -449,7 +495,7 @@ export class SecureStealthStorage {
   clear(): void {
     localStorage.removeItem(STEALTH_STORAGE_KEY);
     sessionStorage.removeItem(STEALTH_SESSION_KEY);
-    this.keys = [];
+    this.keys = []; // Ensure it's always an array
     this.password = null;
     this.initialized = false;
   }
@@ -509,7 +555,7 @@ export class SecureStealthStorage {
   lock(): void {
     this.password = null;
     this.initialized = false;
-    this.keys = [];
+    this.keys = []; // Ensure it's always an array
     sessionStorage.removeItem(STEALTH_SESSION_KEY);
   }
 }
