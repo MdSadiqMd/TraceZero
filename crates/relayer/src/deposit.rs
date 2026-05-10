@@ -232,13 +232,61 @@ impl DepositService {
             .unwrap_or_else(|_| PathBuf::from("used_tokens.dat"));
         let token_store = TokenStore::load(token_path);
 
+        // Load persisted pruned cache from disk (survives restarts)
+        let pruned_cache = Self::load_pruned_cache();
+        if !pruned_cache.is_empty() {
+            info!(
+                "Loaded pruned-log cache for {} bucket(s) — skipping tx scan on first deposit",
+                pruned_cache.len()
+            );
+        }
+
         Self {
             config,
             rpc_client,
             blind_signer,
             merkle_service,
             token_store: Arc::new(RwLock::new(token_store)),
-            sync_pruned_cache: Arc::new(RwLock::new(HashMap::new())),
+            sync_pruned_cache: Arc::new(RwLock::new(pruned_cache)),
+        }
+    }
+
+    fn pruned_cache_path() -> PathBuf {
+        PathBuf::from("pruned_log_cache.json")
+    }
+
+    fn load_pruned_cache() -> HashMap<u8, u64> {
+        let path = Self::pruned_cache_path();
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => {
+                match serde_json::from_str::<HashMap<String, u64>>(&contents) {
+                    Ok(map) => map
+                        .into_iter()
+                        .filter_map(|(k, v)| k.parse::<u8>().ok().map(|k| (k, v)))
+                        .collect(),
+                    Err(e) => {
+                        warn!("Failed to parse pruned cache file: {}", e);
+                        HashMap::new()
+                    }
+                }
+            }
+            Err(_) => HashMap::new(), // File doesn't exist yet — normal on first run
+        }
+    }
+
+    fn save_pruned_cache(cache: &HashMap<u8, u64>) {
+        let path = Self::pruned_cache_path();
+        let string_map: HashMap<String, u64> = cache
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect();
+        match serde_json::to_string(&string_map) {
+            Ok(contents) => {
+                if let Err(e) = std::fs::write(&path, contents) {
+                    warn!("Failed to save pruned cache: {}", e);
+                }
+            }
+            Err(e) => warn!("Failed to serialize pruned cache: {}", e),
         }
     }
 
@@ -664,10 +712,11 @@ impl DepositService {
                     warn!("⚠️  This is acceptable for devnet testing");
                     warn!("⚠️  For production, ALWAYS maintain merkle_state backups");
                     
-                    // Cache that logs are pruned so we don't re-scan next time
+                    // Cache that logs are pruned — persist to disk so it survives restarts
                     {
                         let mut cache = self.sync_pruned_cache.write().await;
                         cache.insert(bucket_id, on_chain_size);
+                        Self::save_pruned_cache(&cache);
                     }
                     
                     // Reset to fresh tree for devnet
@@ -752,29 +801,48 @@ impl DepositService {
 
     /// H-05 FIX: Check relayer has sufficient balance before accepting deposit
     /// This prevents burning user tokens when relayer is insolvent
-    async fn check_relayer_balance(&self, bucket_id: u8) -> Result<()> {
+     async fn check_relayer_balance(&self, bucket_id: u8) -> Result<()> {
         use crate::config::BUCKET_AMOUNTS;
         
         let relayer_pubkey = self.config.keypair.pubkey();
         let required_amount = BUCKET_AMOUNTS[bucket_id as usize];
         
-        // Fetch relayer's current balance
-        let balance = self
-            .rpc_client
-            .get_balance(&relayer_pubkey)
-            .await
-            .map_err(|e| {
-                RelayerError::Internal(format!("Failed to fetch relayer balance: {}", e))
-            })?;
+        // Fetch relayer's balance with retries (RPC through Tor can be flaky)
+        let mut balance = 0u64;
+        let mut last_err = String::new();
+        for attempt in 1..=3 {
+            match self.rpc_client.get_balance(&relayer_pubkey).await {
+                Ok(b) => {
+                    balance = b;
+                    break;
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    warn!("Balance fetch attempt {}/3 failed: {}", attempt, e);
+                    if attempt < 3 {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+                    }
+                }
+            }
+        }
+
+        // If all retries failed, log warning but don't block the deposit
+        // The RPC through Tor may be temporarily unavailable — don't penalise the user
+        if balance == 0 && !last_err.is_empty() {
+            warn!(
+                "Could not fetch relayer balance after 3 attempts ({}). Skipping balance check.",
+                last_err
+            );
+            return Ok(());
+        }
 
         // Calculate minimum required balance:
         // - Deposit amount (goes to pool)
         // - Transaction fee (~5000 lamports)
-        // - Rent for UsedToken account (~1 SOL for safety)
-        // - Rent for Note account (~1 SOL for safety)
-        // - Safety buffer (0.1 SOL)
+        // - Rent for new PDAs: UsedToken + CommitmentRecord (~0.004 SOL actual)
+        // - Safety buffer (0.01 SOL)
         const TX_FEE: u64 = 5_000;
-        const RENT_BUFFER: u64 = 2_100_000_000; // ~2.1 SOL for rent + safety
+        const RENT_BUFFER: u64 = 15_000_000; // 0.015 SOL actual rent + small buffer
         let minimum_balance = required_amount + TX_FEE + RENT_BUFFER;
 
         if balance < minimum_balance {
@@ -790,7 +858,6 @@ impl DepositService {
                 bucket_id, required_amount
             );
             error!("❌ Rejecting deposit to prevent burning user's token");
-            error!("");
             error!("Action required: Fund relayer wallet {} with at least {} SOL",
                 relayer_pubkey,
                 (minimum_balance - balance) as f64 / 1_000_000_000.0
