@@ -104,7 +104,7 @@ function Home() {
               <div className="flex flex-col sm:flex-row gap-4">
                 {connected ? (
                   <Link
-                    to="/credits"
+                    to="/app"
                     className="btn-terminal inline-block text-center"
                   >
                     [LAUNCH_APP]
@@ -327,7 +327,7 @@ function Home() {
             Start making untraceable transactions on Solana
           </p>
           {connected ? (
-            <Link to="/credits" className="btn-terminal inline-block">
+            <Link to="/app" className="btn-terminal inline-block">
               [LAUNCH_APPLICATION]
             </Link>
           ) : (

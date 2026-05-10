@@ -13,6 +13,7 @@ import { Route as WithdrawRouteImport } from './routes/withdraw'
 import { Route as DepositRouteImport } from './routes/deposit'
 import { Route as CreditsRouteImport } from './routes/credits'
 import { Route as ClaimRouteImport } from './routes/claim'
+import { Route as AppRouteImport } from './routes/app'
 import { Route as IndexRouteImport } from './routes/index'
 
 const WithdrawRoute = WithdrawRouteImport.update({
@@ -35,6 +36,11 @@ const ClaimRoute = ClaimRouteImport.update({
   path: '/claim',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AppRoute = AppRouteImport.update({
+  id: '/app',
+  path: '/app',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
@@ -43,6 +49,7 @@ const IndexRoute = IndexRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/app': typeof AppRoute
   '/claim': typeof ClaimRoute
   '/credits': typeof CreditsRoute
   '/deposit': typeof DepositRoute
@@ -50,6 +57,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/app': typeof AppRoute
   '/claim': typeof ClaimRoute
   '/credits': typeof CreditsRoute
   '/deposit': typeof DepositRoute
@@ -58,6 +66,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/app': typeof AppRoute
   '/claim': typeof ClaimRoute
   '/credits': typeof CreditsRoute
   '/deposit': typeof DepositRoute
@@ -65,14 +74,22 @@ export interface FileRoutesById {
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/claim' | '/credits' | '/deposit' | '/withdraw'
+  fullPaths: '/' | '/app' | '/claim' | '/credits' | '/deposit' | '/withdraw'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/claim' | '/credits' | '/deposit' | '/withdraw'
-  id: '__root__' | '/' | '/claim' | '/credits' | '/deposit' | '/withdraw'
+  to: '/' | '/app' | '/claim' | '/credits' | '/deposit' | '/withdraw'
+  id:
+    | '__root__'
+    | '/'
+    | '/app'
+    | '/claim'
+    | '/credits'
+    | '/deposit'
+    | '/withdraw'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AppRoute: typeof AppRoute
   ClaimRoute: typeof ClaimRoute
   CreditsRoute: typeof CreditsRoute
   DepositRoute: typeof DepositRoute
@@ -109,6 +126,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ClaimRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/app': {
+      id: '/app'
+      path: '/app'
+      fullPath: '/app'
+      preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
       id: '/'
       path: '/'
@@ -121,6 +145,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AppRoute: AppRoute,
   ClaimRoute: ClaimRoute,
   CreditsRoute: CreditsRoute,
   DepositRoute: DepositRoute,
