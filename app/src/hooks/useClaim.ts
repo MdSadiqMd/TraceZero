@@ -87,27 +87,31 @@ export function useClaim() {
 
   const claim = useCallback(
     async (stealthAddress: string, destination: string): Promise<string> => {
-      if (!isUnlocked) {
-        const sessionPassword = sessionStorage.getItem("stealth-session-password");
-        if (sessionPassword) {
-          const unlocked = await secureStealthStorage.initialize(sessionPassword);
-          if (unlocked) {
-            setIsUnlocked(true);
-          } else {
-            throw new Error("Failed to auto-unlock storage");
-          }
-        } else {
-          throw new Error("Storage locked. Please unlock first.");
-        }
-      }
-
       setClaiming(stealthAddress);
       setError(null);
       try {
         const conn = new Connection(RPC_URL, "confirmed");
-        const all = secureStealthStorage.getKeys();
-        const entry = all.find((k) => k.stealthAddress === stealthAddress);
-        if (!entry) throw new Error("Stealth key not found");
+        
+        // Try to get keys from secure storage first, fall back to plaintext
+        let entry: StoredStealthKey | undefined;
+        
+        try {
+          if (isUnlocked || secureStealthStorage.isInitialized()) {
+            const all = secureStealthStorage.getKeys();
+            entry = all.find((k) => k.stealthAddress === stealthAddress);
+          }
+        } catch (error) {
+          console.warn("Failed to get keys from secure storage, trying plaintext:", error);
+        }
+        
+        // Fallback to plaintext storage
+        if (!entry) {
+          const { getStealthKeys } = await import("@/lib/crypto/secureStorage");
+          const plaintextKeys = getStealthKeys();
+          entry = plaintextKeys.find((k) => k.stealthAddress === stealthAddress);
+        }
+        
+        if (!entry) throw new Error("Stealth key not found in storage");
 
         // Decode the secret key
         const secretBytes = Uint8Array.from(atob(entry.stealthSecretKey), (c) =>
@@ -167,7 +171,19 @@ export function useClaim() {
           },
           "confirmed",
         );
-        await secureStealthStorage.markSwept(stealthAddress, sig);
+        
+        // Try to mark as swept in secure storage, fall back to plaintext
+        try {
+          if (isUnlocked || secureStealthStorage.isInitialized()) {
+            await secureStealthStorage.markSwept(stealthAddress, sig);
+          } else {
+            throw new Error("Secure storage not available");
+          }
+        } catch (error) {
+          console.warn("Failed to mark swept in secure storage, using plaintext:", error);
+          const { markStealthKeySwept } = await import("@/lib/crypto/secureStorage");
+          markStealthKeySwept(stealthAddress, sig);
+        }
 
         // Update local state
         setEntries((prev) =>

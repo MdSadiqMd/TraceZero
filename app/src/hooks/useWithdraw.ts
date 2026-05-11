@@ -314,17 +314,33 @@ export function useWithdraw() {
                 // Auto-initialize with a default password derived from wallet
                 // This provides encryption without user interaction
                 const defaultPassword = `tracezero-${Date.now()}-${Math.random().toString(36)}`;
-                await secureStealthStorage.initialize(defaultPassword);
-                console.log("✓ Stealth key storage initialized automatically");
+                const initialized = await secureStealthStorage.initialize(defaultPassword);
+                if (initialized) {
+                  console.log("✓ Stealth key storage initialized automatically");
+                } else {
+                  throw new Error("Failed to initialize storage");
+                }
               }
             }
             
-            await secureStealthStorage.addKey(entry);
+            // Double-check initialization before adding key
+            if (secureStealthStorage.isInitialized()) {
+              await secureStealthStorage.addKey(entry);
+            } else {
+              throw new Error("Storage not initialized after initialization attempt");
+            }
           } catch (error) {
             console.error("Failed to save stealth key:", error);
             // Fallback to deprecated plaintext storage with warning
             console.warn("SECURITY WARNING: Falling back to plaintext storage");
-            addStealthKey(entry);
+            try {
+              addStealthKey(entry);
+            } catch (fallbackError) {
+              console.error("Plaintext fallback also failed:", fallbackError);
+              // Clear corrupted storage and try one more time
+              localStorage.removeItem('privacy-proxy-stealth-keys');
+              addStealthKey(entry);
+            }
           }
         }
 
