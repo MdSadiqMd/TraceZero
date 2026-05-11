@@ -412,6 +412,12 @@ export class SecureStealthStorage {
       throw new Error("Storage not initialized");
     }
 
+    // Ensure we're always saving an array
+    if (!Array.isArray(this.keys)) {
+      console.error('CRITICAL: Attempting to save non-array keys, resetting to empty array');
+      this.keys = [];
+    }
+
     const data = JSON.stringify(this.keys);
     const encrypted = await encrypt(data, this.password);
     localStorage.setItem(STEALTH_STORAGE_KEY, JSON.stringify(encrypted));
@@ -426,8 +432,9 @@ export class SecureStealthStorage {
     }
     
     // CRITICAL: Ensure keys is always an array before any operation
-    if (!Array.isArray(this.keys)) {
-      console.error('CRITICAL: keys was not an array, resetting to empty array');
+    // This check must happen BEFORE any array method is called
+    if (!this.keys || !Array.isArray(this.keys)) {
+      console.error('CRITICAL: keys was not an array, resetting to empty array', typeof this.keys, this.keys);
       this.keys = [];
     }
     
@@ -436,15 +443,27 @@ export class SecureStealthStorage {
       throw new Error("Invalid stealth key entry");
     }
     
-    // Avoid duplicates - use try-catch in case .some() fails
+    // Avoid duplicates - double-check array before using .some()
+    if (!Array.isArray(this.keys)) {
+      console.error('CRITICAL: keys became non-array after validation, resetting');
+      this.keys = [];
+    }
+    
     try {
-      if (this.keys.some((k) => k.stealthAddress === entry.stealthAddress)) {
+      // Final safety check before .some()
+      if (Array.isArray(this.keys) && this.keys.some((k) => k && k.stealthAddress === entry.stealthAddress)) {
         console.log('Stealth key already exists, skipping duplicate');
         return;
       }
     } catch (error) {
-      console.error('Error checking for duplicates:', error);
+      console.error('Error checking for duplicates:', error, 'keys type:', typeof this.keys, 'keys value:', this.keys);
       // Reset keys if .some() fails
+      this.keys = [];
+    }
+    
+    // Final check before push
+    if (!Array.isArray(this.keys)) {
+      console.error('CRITICAL: keys is not array before push, resetting');
       this.keys = [];
     }
     
@@ -571,23 +590,49 @@ function loadStealthKeys(): StoredStealthKey[] {
   try {
     const raw = localStorage.getItem(STEALTH_STORAGE_KEY);
     if (!raw) return [];
-    return JSON.parse(raw) as StoredStealthKey[];
-  } catch {
+    const parsed = JSON.parse(raw);
+    // Ensure it's an array
+    if (!Array.isArray(parsed)) {
+      console.error('Corrupted plaintext storage: not an array, resetting');
+      localStorage.removeItem(STEALTH_STORAGE_KEY);
+      return [];
+    }
+    return parsed as StoredStealthKey[];
+  } catch (error) {
+    console.error('Failed to load plaintext keys:', error);
+    localStorage.removeItem(STEALTH_STORAGE_KEY);
     return [];
   }
 }
 
 function saveStealthKeys(keys: StoredStealthKey[]): void {
   console.warn('DEPRECATED: saveStealthKeys() uses plaintext storage');
+  // Ensure we're saving an array
+  if (!Array.isArray(keys)) {
+    console.error('Attempting to save non-array keys, resetting to empty array');
+    keys = [];
+  }
   localStorage.setItem(STEALTH_STORAGE_KEY, JSON.stringify(keys));
 }
 
 export function addStealthKey(entry: StoredStealthKey): void {
   console.warn('DEPRECATED: addStealthKey() uses plaintext storage. Use secureStealthStorage.addKey() instead.');
-  const keys = loadStealthKeys();
-  if (keys.some((k) => k.stealthAddress === entry.stealthAddress)) return;
-  keys.push(entry);
-  saveStealthKeys(keys);
+  try {
+    const keys = loadStealthKeys();
+    // Ensure keys is an array before using .some()
+    if (!Array.isArray(keys)) {
+      console.error('Keys is not an array, resetting');
+      saveStealthKeys([entry]);
+      return;
+    }
+    if (keys.some((k) => k && k.stealthAddress === entry.stealthAddress)) return;
+    keys.push(entry);
+    saveStealthKeys(keys);
+  } catch (error) {
+    console.error('Failed to add stealth key:', error);
+    // Reset storage and save just this entry
+    saveStealthKeys([entry]);
+  }
 }
 
 export function getStealthKeys(): StoredStealthKey[] {
