@@ -21,6 +21,7 @@ HiddenServiceVersion 3
 # tor-privoxy and tor-gateway can connect.
 SocksPort 0.0.0.0:9050
 # Only allow connections from within the tracezero Docker network
+SocksPolicy accept 127.0.0.1
 SocksPolicy accept 172.30.0.0/24
 SocksPolicy reject *
 
