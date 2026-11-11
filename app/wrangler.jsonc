@@ -10,6 +10,6 @@
 		"nodejs_compat"
 	],
 	"vars": {
-		"VITE_RELAYER_URL": ""
+		"VITE_RELAYER_URL": "https://13.233.148.212.nip.io"
 	}
 }

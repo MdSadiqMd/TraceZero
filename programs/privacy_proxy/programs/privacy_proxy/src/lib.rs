@@ -11,6 +11,7 @@ use instructions::deposit::*;
 use instructions::execute_withdrawal::*;
 use instructions::init_pool::*;
 use instructions::initialize::*;
+use instructions::migrate_config::*;
 use instructions::purchase_credits::*;
 use instructions::request_withdrawal::*;
 use instructions::update_config::*;
@@ -99,5 +100,9 @@ pub mod privacy_proxy {
 
     pub fn update_config(ctx: Context<UpdateConfig>, params: UpdateConfigParams) -> Result<()> {
         instructions::update_config::handler(ctx, params)
+    }
+
+    pub fn migrate_config(ctx: Context<MigrateConfig>) -> Result<()> {
+        instructions::migrate_config::handler(ctx)
     }
 }

@@ -3,6 +3,7 @@ pub mod deposit;
 pub mod execute_withdrawal;
 pub mod init_pool;
 pub mod initialize;
+pub mod migrate_config;
 pub mod purchase_credits;
 pub mod request_withdrawal;
 pub mod update_config;
